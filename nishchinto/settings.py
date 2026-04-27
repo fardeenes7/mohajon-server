@@ -192,18 +192,21 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'UPDATE_LAST_LOGIN': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
 }
 
 # REST Auth settings — dj-rest-auth v4+ uses this dict format.
-# REST_USE_JWT = True is the old v2 setting and is silently ignored in v4+.
 REST_AUTH = {
     'USE_JWT': True,
     'JWT_AUTH_COOKIE': 'nishchinto-auth',
     'JWT_AUTH_REFRESH_COOKIE': 'nishchinto-refresh-token',
     'JWT_AUTH_HTTPONLY': True,
+    'JWT_AUTH_RETURN_EXPIRATION': True,
+    'SESSION_LOGIN': False,
     # Prevent dj-rest-auth from trying to create DRF Knox tokens (not used)
     'TOKEN_MODEL': None,
 }
