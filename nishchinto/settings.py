@@ -197,11 +197,16 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
 }
 
-# REST Auth JWT settings
-REST_USE_JWT = True
-JWT_AUTH_COOKIE = 'nishchinto-auth'
-JWT_AUTH_REFRESH_COOKIE = 'nishchinto-refresh-token'
-JWT_AUTH_HTTPONLY = True # Disable JS access to the cookie for security
+# REST Auth settings — dj-rest-auth v4+ uses this dict format.
+# REST_USE_JWT = True is the old v2 setting and is silently ignored in v4+.
+REST_AUTH = {
+    'USE_JWT': True,
+    'JWT_AUTH_COOKIE': 'nishchinto-auth',
+    'JWT_AUTH_REFRESH_COOKIE': 'nishchinto-refresh-token',
+    'JWT_AUTH_HTTPONLY': True,
+    # Prevent dj-rest-auth from trying to create DRF Knox tokens (not used)
+    'TOKEN_MODEL': None,
+}
 
 
 # SPECTACULAR
