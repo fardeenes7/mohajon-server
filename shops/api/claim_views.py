@@ -27,10 +27,10 @@ class ShopCreateView(generics.CreateAPIView):
         
         subdomain = serializer.validated_data['subdomain'].lower()
         name = serializer.validated_data['name']
-        ref_subdomain = serializer.validated_data.get('ref') or request.COOKIES.get('nishchinto_ref')
+        ref_subdomain = serializer.validated_data.get('ref') or request.COOKIES.get('mohajon_ref')
         user = request.user
 
-        # 1. Check if user already owns a shop (Nishchinto is 1-shop-per-user for now)
+        # 1. Check if user already owns a shop (Mohajon is 1-shop-per-user for now)
         if ShopMember.objects.filter(user=user, role='OWNER').exists():
             return Response({'detail': 'You already own a shop.'}, status=status.HTTP_400_BAD_REQUEST)
 

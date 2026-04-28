@@ -10,7 +10,7 @@ Fix 6.8 (post_v03_debrief.md).
 
 catalog_reindex_all: One-shot task to rebuild the entire Meilisearch products
 index from Postgres. Run manually after initial deploy:
-  celery -A nishchinto call catalog.tasks.catalog_reindex_all
+  celery -A mohajon call catalog.tasks.catalog_reindex_all
 """
 import logging
 
@@ -81,7 +81,7 @@ def catalog_reindex_all():
     into Meilisearch in batches of 100.
 
     Run once after initial deploy or after index corruption:
-      celery -A nishchinto call catalog.tasks.catalog_reindex_all
+      celery -A mohajon call catalog.tasks.catalog_reindex_all
     """
     from catalog.models import Product
     from catalog.services.search import get_or_create_index, build_product_document

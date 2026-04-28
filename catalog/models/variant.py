@@ -29,7 +29,7 @@ class ProductVariant(TenantModel):
         help_text="Denormalized for RLS index efficiency",
     )
     image = models.ForeignKey(
-        "nishchinto_media.Media",
+        "mohajon_media.Media",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

@@ -5,7 +5,7 @@ from core.models import SoftDeleteModel, TenantModel
 
 class PlatformBalance(TenantModel):
     """
-    Tracks the balance of a shop within the Nishchinto platform.
+    Tracks the balance of a shop within the Mohajon platform.
     Used for settlements, shipping fee deductions, and markups.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

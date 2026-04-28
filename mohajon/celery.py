@@ -3,9 +3,9 @@ from celery import Celery
 from kombu import Exchange, Queue
 
 # Set the default Django settings module for the 'celery' program.
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'nishchinto.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mohajon.settings')
 
-app = Celery('nishchinto')
+app = Celery('mohajon')
 
 # Using a string here means the worker doesn't have to serialize
 # the configuration object to child processes.

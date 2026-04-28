@@ -1,7 +1,7 @@
 from django.test import SimpleTestCase
 from unittest.mock import MagicMock, patch
 
-from nishchinto.celery import app as celery_app
+from mohajon.celery import app as celery_app
 
 
 class CeleryAiIsolationConfigTests(SimpleTestCase):

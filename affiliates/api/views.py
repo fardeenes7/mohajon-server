@@ -32,7 +32,7 @@ class AffiliateViewSet(viewsets.ViewSet):
             
             # Redirect to signup with ref in query param and set cookie
             response = redirect(f"{settings.WEB_URL}/signup?ref={ref_subdomain}")
-            response.set_cookie('nishchinto_ref', ref_subdomain, max_age=60*60*24*30) # 30 days
+            response.set_cookie('mohajon_ref', ref_subdomain, max_age=60*60*24*30) # 30 days
             return response
             
         except Shop.DoesNotExist:

@@ -12,7 +12,7 @@ def user_register(*, email: str, password: str) -> User:
         
     # Transaction committed, safe to queue celery task
     # Real link would abstract the frontend auth endpoint
-    verification_url = f"https://app.nishchinto.com.bd/auth/verify?email={email}"
+    verification_url = f"https://app.mohajon.io/auth/verify?email={email}"
     send_verification_email_task.delay(user.email, verification_url)
     
     return user

@@ -34,7 +34,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
 	-- 4. Grant connect permission to pgbouncer
 	GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO "$PGBOUNCER_DB_USER";
 
-	-- 5. Hardening: Ensure nishchinto has access to future tables
+	-- 5. Hardening: Ensure mohajon has access to future tables
 	-- This is critical for Django migrations run by the superuser.
 	ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "$APP_DB_USER";
 	ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "$APP_DB_USER";
@@ -45,12 +45,4 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
 
 	-- 7. Enable pgvector
 	CREATE EXTENSION IF NOT EXISTS vector;
-
-	-- 8. Refresh collation version fingerprints to match the running glibc.
-	--    The postgres_data volume may have been initialized by a different image
-	--    version. This is harmless if already matching; it suppresses the
-	--    "collation version mismatch" WARNING that would otherwise spam logs.
-	ALTER DATABASE postgres   REFRESH COLLATION VERSION;
-	ALTER DATABASE template1  REFRESH COLLATION VERSION;
-	ALTER DATABASE "$POSTGRES_DB" REFRESH COLLATION VERSION;
 EOSQL

@@ -345,7 +345,7 @@ def _get_invoice_payment_link(*, shop_id: str, page_id: str, psid: str, order_id
         return {"error": "Order or shop not found."}
 
     invoice = payment_invoice_create(order=order)
-    base = f"https://{shop.subdomain}.nishchinto.com.bd"
+    base = f"https://{shop.subdomain}.mohajon.store"
     return {"payment_url": f"{base}/pay/{invoice.token}", "expires_in_minutes": 30}
 
 

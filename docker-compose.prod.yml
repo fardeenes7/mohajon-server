@@ -24,7 +24,7 @@ services:
             test:
                 [
                     "CMD-SHELL",
-                    "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+                    "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
                 ]
             interval: 10s
             timeout: 5s
@@ -165,7 +165,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A nishchinto worker -l info -Q default --concurrency 4
+        command: celery -A mohajon worker -l info -Q default --concurrency 4
         restart: always
         environment:
             DEBUG: "False"
@@ -190,7 +190,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A nishchinto worker -l info -Q high_priority --concurrency 2
+        command: celery -A mohajon worker -l info -Q high_priority --concurrency 2
         restart: always
         environment:
             DEBUG: "False"
@@ -215,7 +215,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A nishchinto worker -l info -Q media_processing --concurrency 2
+        command: celery -A mohajon worker -l info -Q media_processing --concurrency 2
         restart: always
         environment:
             DEBUG: "False"
@@ -241,7 +241,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A nishchinto worker -l info -Q ai_rag --concurrency 2
+        command: celery -A mohajon worker -l info -Q ai_rag --concurrency 2
         restart: always
         environment:
             DEBUG: "False"
@@ -266,7 +266,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A nishchinto worker -l info -Q ai_copy --concurrency 2
+        command: celery -A mohajon worker -l info -Q ai_copy --concurrency 2
         restart: always
         environment:
             DEBUG: "False"
@@ -288,7 +288,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A nishchinto worker -l info -Q ai_image --concurrency 2
+        command: celery -A mohajon worker -l info -Q ai_image --concurrency 2
         restart: always
         environment:
             DEBUG: "False"
@@ -310,7 +310,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A nishchinto beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+        command: celery -A mohajon beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
         restart: always
         environment:
             DEBUG: "False"

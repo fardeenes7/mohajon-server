@@ -94,7 +94,7 @@ MIDDLEWARE = [
     'core.middleware.TenantMiddleware', # Context-aware RLS middleware
 ]
 
-ROOT_URLCONF = 'nishchinto.urls'
+ROOT_URLCONF = 'mohajon.urls'
 
 TEMPLATES = [
     {
@@ -112,14 +112,14 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'nishchinto.wsgi.application'
+WSGI_APPLICATION = 'mohajon.wsgi.application'
 
 import sys
 IS_TESTING = 'test' in sys.argv
 
 DATABASES = {
     'default': {
-        **env.db('DATABASE_URL', default='postgres://nishchinto:nishchinto_password@localhost:5432/nishchinto'),
+        **env.db('DATABASE_URL', default='postgres://mohajon:mohajon_password@localhost:5432/mohajon'),
         'CONN_MAX_AGE': env.int('CONN_MAX_AGE', default=60),
     }
 }
@@ -160,9 +160,9 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'mediafiles')
 # Use AWS_S3_ENDPOINT_URL to switch between local MinIO and real S3:
 #   Dev:  AWS_S3_ENDPOINT_URL=http://localhost:9000
 #   Prod: leave AWS_S3_ENDPOINT_URL unset (points to real AWS S3)
-AWS_ACCESS_KEY_ID = env('AWS_ACCESS_KEY_ID', default='nishchinto_minio')
-AWS_SECRET_ACCESS_KEY = env('AWS_SECRET_ACCESS_KEY', default='nishchinto_minio_secret')
-AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME', default='nishchinto-media')
+AWS_ACCESS_KEY_ID = env('AWS_ACCESS_KEY_ID', default='mohajon_minio')
+AWS_SECRET_ACCESS_KEY = env('AWS_SECRET_ACCESS_KEY', default='mohajon_minio_secret')
+AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME', default='mohajon-media')
 AWS_S3_REGION_NAME = env('AWS_S3_REGION_NAME', default='us-east-1')
 AWS_S3_ENDPOINT_URL = env('AWS_S3_ENDPOINT_URL', default='')
 AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400, public'}
@@ -202,8 +202,8 @@ SIMPLE_JWT = {
 # REST Auth settings — dj-rest-auth v4+ uses this dict format.
 REST_AUTH = {
     'USE_JWT': True,
-    'JWT_AUTH_COOKIE': 'nishchinto-auth',
-    'JWT_AUTH_REFRESH_COOKIE': 'nishchinto-refresh-token',
+    'JWT_AUTH_COOKIE': 'mohajon-auth',
+    'JWT_AUTH_REFRESH_COOKIE': 'mohajon-refresh-token',
     'JWT_AUTH_HTTPONLY': True,
     'JWT_AUTH_RETURN_EXPIRATION': True,
     'SESSION_LOGIN': False,
@@ -214,14 +214,14 @@ REST_AUTH = {
 
 # SPECTACULAR
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Nishchinto SaaS API',
+    'TITLE': 'Mohajon SaaS API',
     'DESCRIPTION': 'Modular Monolith Backend',
     'VERSION': '0.1.0',
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
 # Celery Configuration
-CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='amqp://nishchinto:nishchinto_password@localhost:5672//')
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='amqp://mohajon:mohajon_password@localhost:5672//')
 CELERY_RESULT_BACKEND = env('REDIS_URL', default='redis://localhost:6379/0')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -318,7 +318,7 @@ EMAIL_PORT = env.int('EMAIL_PORT', default=2525)
 EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
 EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
-DEFAULT_FROM_EMAIL = '"Nishchinto" <noreply@nishchinto.com.bd>'
+DEFAULT_FROM_EMAIL = '"Mohajon" <noreply@mohajon.io>'
 
 # CORS / CSRF Configuration
 # In production: set CORS_ALLOWED_ORIGINS and CSRF_TRUSTED_ORIGINS via env
@@ -336,7 +336,7 @@ CSRF_TRUSTED_ORIGINS = env.list(
 # Subdomain Routing Security
 SUBDOMAIN_BLACKLIST = {
     'admin', 'api', 'app', 'auth', 'mail', 'www', 'help', 'static', 'media', 'public',
-    'support', 'dashboard', 'nishchinto', 'checkout', 'pay', 'billing', 'docs'
+    'support', 'dashboard', 'mohajon', 'checkout', 'pay', 'billing', 'docs'
 }
 
 # ── Meilisearch (Fix 6.8 — replaces Postgres FTS from v0.3) ─────────────────
@@ -344,13 +344,13 @@ SUBDOMAIN_BLACKLIST = {
 # typo-tolerance and faceted filtering.
 # CatalogIndexingTask syncs Product records on create/update/delete via post_save.
 MEILISEARCH_HOST = env('MEILISEARCH_HOST', default='http://localhost:7700')
-MEILISEARCH_API_KEY = env('MEILISEARCH_API_KEY', default='nishchinto_meili_master_key')
+MEILISEARCH_API_KEY = env('MEILISEARCH_API_KEY', default='mohajon_meili_master_key')
 
 # ── Meta OAuth (v0.4 social connect) ───────────────────────────────────────
 META_APP_ID = env('META_APP_ID', default='')
 META_APP_SECRET = env('META_APP_SECRET', default='')
 META_OAUTH_REDIRECT_URI = env('META_OAUTH_REDIRECT_URI', default='')
-META_WEBHOOK_VERIFY_TOKEN = env('META_WEBHOOK_VERIFY_TOKEN', default='nishchinto_webhook_verify')
+META_WEBHOOK_VERIFY_TOKEN = env('META_WEBHOOK_VERIFY_TOKEN', default='mohajon_webhook_verify')
 
 # ── OpenAI (v0.6 AI Chatbot) ─────────────────────────────────────────────────
 OPENAI_API_KEY = env('OPENAI_API_KEY', default='')

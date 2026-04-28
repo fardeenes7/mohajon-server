@@ -8,7 +8,7 @@ EXPECTED_A_RECORDS = ["104.21.10.10", "104.21.10.11"]
 
 def verify_dns_readiness(domain: str) -> dict:
     """
-    Verifies if a domain is properly pointing to the Nishchinto infrastructure.
+    Verifies if a domain is properly pointing to the Mohajon infrastructure.
     Returns a dict with 'valid' and 'reason'.
     """
     try:

@@ -90,7 +90,7 @@ def handle_comment_auto_reply(
         from shops.models import Shop
         try:
             shop = Shop.objects.get(id=shop_id)
-            storefront_url = f"https://{shop.subdomain}.nishchinto.com.bd/products/{product.slug}"
+            storefront_url = f"https://{shop.subdomain}.mohajon.store/products/{product.slug}"
         except Exception:
             storefront_url = "#"
 

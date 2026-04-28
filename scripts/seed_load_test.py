@@ -2,7 +2,7 @@ import os
 import django
 from decimal import Decimal
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'nishchinto.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mohajon.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model

@@ -11,17 +11,17 @@ def send_verification_email_task(user_email: str, verification_link: str):
     Sends an async welcome/verification email via Celery.
     Routed to 'high_priority' queue to ensure user can log in immediately.
     """
-    subject = "Welcome to Nishchinto - Please verify your email"
+    subject = "Welcome to Mohajon - Please verify your email"
     message = f"""
     Hello,
 
-    Welcome to Nishchinto! Verify your account by clicking the link below:
+    Welcome to Mohajon! Verify your account by clicking the link below:
     {verification_link}
 
     If you did not request this, please ignore this email.
 
     Regards,
-    Team Nishchinto
+    Team Mohajon
     """
     
     try:

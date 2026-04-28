@@ -11,10 +11,10 @@ def send_waitlist_invite_email(email, token):
     """
     Sends an invitation email to the approved waitlist user.
     """
-    frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.nishchinto.com.bd')
+    frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.mohajon.io')
     claim_url = f"{frontend_url}/claim?token={token}"
     
-    subject = "Your Nishchinto Beta Invite is Ready!"
+    subject = "Your Mohajon Beta Invite is Ready!"
     message = f"Congratulations! You've been approved. Click here to claim your shop: {claim_url}"
     
     send_mail(

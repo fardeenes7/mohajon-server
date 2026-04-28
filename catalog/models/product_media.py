@@ -18,7 +18,7 @@ class ProductMedia(TenantModel):
         related_name="product_media",
     )
     media = models.ForeignKey(
-        "nishchinto_media.Media",
+        "mohajon_media.Media",
         on_delete=models.CASCADE,
         related_name="product_links",
     )

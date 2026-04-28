@@ -104,7 +104,7 @@ class FAQEntry(TenantModel):
     and only returns results above a 0.75 threshold.
 
     Platform Privacy Policy is NOT stored here — it is a platform-level
-    document controlled by Nishchinto (global_business_rules_and_limits.md §5).
+    document controlled by Mohajon (global_business_rules_and_limits.md §5).
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

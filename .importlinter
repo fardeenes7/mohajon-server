@@ -1,5 +1,5 @@
 [importlinter]
-root_package = nishchinto
+root_package = mohajon
 
 [importlinter:contract:1]
 name = Enforce modular boundaries (Users should not depend on Shops logic)
@@ -30,7 +30,7 @@ forbidden_modules = marketing
 [importlinter:contract:media_isolation]
 name = Media must not import from catalog directly
 type = forbidden
-source_modules = nishchinto_media
+source_modules = mohajon_media
 forbidden_modules = catalog
 
 [importlinter:contract:shops_isolation]

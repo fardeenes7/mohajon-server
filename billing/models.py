@@ -1,5 +1,5 @@
 """
-Billing, Subscription, and Payment Gateway models for Nishchinto.
+Billing, Subscription, and Payment Gateway models for Mohajon.
 
 EPIC A — Subscription & Access Control
 EPIC B — Payment Gateways & Processing
@@ -655,7 +655,7 @@ class OutboundWebhook(TenantModel):
 
     def build_signature(self, payload_bytes: bytes) -> str:
         """
-        Returns X-Nishchinto-Signature header value.
+        Returns X-Mohajon-Signature header value.
         Format: sha256=<hex_digest>
         """
         import hmac

@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('nishchinto_media', '0001_initial'),
+        ('mohajon_media', '0001_initial'),
         ('shops', '0004_subscriptionplan_shop_override_max_staff_and_more'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
@@ -83,7 +83,7 @@ class Migration(migrations.Migration):
                 ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
                 ('sort_order', models.PositiveIntegerField(default=0)),
                 ('is_thumbnail', models.BooleanField(default=False, help_text="If True, this image is used as the product's primary thumbnail")),
-                ('media', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='product_links', to='nishchinto_media.media')),
+                ('media', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='product_links', to='mohajon_media.media')),
                 ('product', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='product_media', to='catalog.product')),
                 ('shop', models.ForeignKey(db_index=False, help_text='Denormalized for RLS efficiency', on_delete=django.db.models.deletion.CASCADE, related_name='product_media_links', to='shops.shop')),
             ],
@@ -109,7 +109,7 @@ class Migration(migrations.Migration):
                 ('weight_override_grams', models.PositiveIntegerField(blank=True, help_text='Overrides master product weight if set', null=True)),
                 ('stock_quantity', models.PositiveIntegerField(default=0)),
                 ('is_active', models.BooleanField(default=True)),
-                ('image', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='variant_images', to='nishchinto_media.media')),
+                ('image', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='variant_images', to='mohajon_media.media')),
                 ('product', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='variants', to='catalog.product')),
                 ('shop', models.ForeignKey(db_index=False, help_text='Denormalized for RLS index efficiency', on_delete=django.db.models.deletion.CASCADE, related_name='product_variants', to='shops.shop')),
             ],

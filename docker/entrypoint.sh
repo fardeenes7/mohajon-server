@@ -2,7 +2,7 @@
 set -e
 
 echo "──────────────────────────────────────────────────────"
-echo "  Nishchinto Backend — Container Startup"
+echo "  Mohajon Backend — Container Startup"
 echo "──────────────────────────────────────────────────────"
 
 # Only the API (python/gunicorn) should run migrations and collectstatic.

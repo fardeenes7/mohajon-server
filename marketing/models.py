@@ -134,7 +134,7 @@ class MetaAdAccount(TenantModel):
 
 class MetaAdCampaign(TenantModel):
     """
-    Tracks automated ad campaigns launched via Nishchinto.
+    Tracks automated ad campaigns launched via Mohajon.
     """
     STATUS_CHOICES = (
         ('ACTIVE', 'Active'),

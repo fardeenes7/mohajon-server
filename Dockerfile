@@ -54,7 +54,7 @@ USER django
 EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["gunicorn", "nishchinto.wsgi:application", \
+CMD ["gunicorn", "mohajon.wsgi:application", \
     "--bind", "0.0.0.0:8000", \
     "--workers", "4", \
     "--threads", "2", \

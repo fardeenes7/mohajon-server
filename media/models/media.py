@@ -56,7 +56,7 @@ class Media(models.Model):
     deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
-        app_label = "nishchinto_media"
+        app_label = "mohajon_media"
         verbose_name = "Media"
         verbose_name_plural = "Media"
         indexes = [
