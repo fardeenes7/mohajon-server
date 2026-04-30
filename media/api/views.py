@@ -11,10 +11,11 @@ Authenticated endpoints — shop context injected via X-Tenant-ID header
 import logging
 
 from drf_spectacular.utils import extend_schema
-from rest_framework import status
+from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.pagination import PageNumberPagination
 
 from media.api.serializers import (
     ConfirmUploadSerializer,
@@ -100,6 +101,31 @@ class ConfirmUploadView(APIView):
         )
 
         return Response(MediaSerializer(media).data, status=status.HTTP_201_CREATED)
+
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 18
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class MediaListView(generics.ListAPIView):
+    """
+    GET /api/v1/media/
+    List media for the current shop.
+    """
+    serializer_class = MediaSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
+
+    @extend_schema(
+        responses={200: MediaSerializer(many=True)},
+        summary="List media assets",
+        tags=["media"],
+    )
+    def get_queryset(self):
+        shop_id = getattr(self.request, "tenant_id", None)
+        return Media.objects.filter(shop_id=shop_id, deleted_at__isnull=True).order_by('-created_at')
 
 
 class MediaDeleteView(APIView):
