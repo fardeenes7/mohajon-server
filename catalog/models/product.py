@@ -18,7 +18,7 @@ from django.db import models
 from django.utils.text import slugify
 from pgvector.django import VectorField
 
-from core.models import TenantModel
+from core.models import TenantModel, VectorStatus
 
 
 class ProductStatus(models.TextChoices):
@@ -97,6 +97,12 @@ class Product(TenantModel):
     # ── Semantic embedding for RAG (populated by Celery) ───────────────────
     # 1536-dim vector from text-embedding-3-small
     embedding = VectorField(dimensions=1536, null=True, blank=True)
+    vector_status = models.CharField(
+        max_length=20,
+        choices=VectorStatus.choices,
+        default=VectorStatus.PENDING,
+        db_index=True,
+    )
 
     class Meta:
         verbose_name = "Product"

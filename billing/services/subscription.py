@@ -43,6 +43,8 @@ def activate_subscription(shop: Shop, tier: str) -> ShopSubscription:
     sub = get_or_create_subscription(shop)
     now = timezone.now()
 
+    old_tier = sub.tier
+
     sub.tier = tier
     sub.status = ShopSubscription.STATUS_ACTIVE
     sub.grace_period_until = None
@@ -54,6 +56,11 @@ def activate_subscription(shop: Shop, tier: str) -> ShopSubscription:
         'last_paid_at', 'current_period_start', 'current_period_end',
         'updated_at',
     ])
+
+    if old_tier == ShopSubscription.TIER_FREE and tier != ShopSubscription.TIER_FREE:
+        from messenger.tasks.rag import backfill_skipped_embeddings
+        backfill_skipped_embeddings.delay(shop_id=str(shop.id))
+
     return sub
 
 

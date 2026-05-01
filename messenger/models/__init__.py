@@ -12,7 +12,7 @@ import uuid
 from django.db import models
 from pgvector.django import VectorField
 
-from core.models import SoftDeleteModel, TenantModel
+from core.models import SoftDeleteModel, TenantModel, VectorStatus
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +123,12 @@ class FAQEntry(TenantModel):
     answer = models.TextField()
     # 1536-dim vector from text-embedding-3-small (populated by Celery).
     embedding = VectorField(dimensions=1536, null=True, blank=True)
+    vector_status = models.CharField(
+        max_length=20,
+        choices=VectorStatus.choices,
+        default=VectorStatus.PENDING,
+        db_index=True,
+    )
     is_active = models.BooleanField(default=True, db_index=True)
     sort_order = models.PositiveIntegerField(default=0, db_index=True)
 

@@ -234,12 +234,9 @@ class AIGateway:
 
     def call_embedding(self, text: str, **kwargs) -> list[float]:
         """
-        Generate embeddings for a piece of text and deduct credits.
+        Generate embeddings for a piece of text.
+        Vector creation is FREE and does NOT deduct AI credits.
         """
-        from core.services.ai_credits import has_sufficient_ai_credits
-        if not has_sufficient_ai_credits(shop_id=self.shop_id):
-            raise ValueError("Insufficient AI credits to perform this request.")
-
         model_config = resolve_ai_model(usage=AIModelUsage.EMBEDDING)
         client = self._get_client(model_config.provider)
 
@@ -255,14 +252,14 @@ class AIGateway:
             if usage:
                 # text-embedding-3-small is usually $0.02 / 1M tokens
                 rate = model_config.input_price_per_1m_tokens or Decimal("0.02")
+                from core.services.ai_credits import calculate_credits
                 
-                credits_to_deduct, usd_cost = calculate_credits(
+                _, usd_cost = calculate_credits(
                     model_input_rate=rate,
                     model_output_rate=Decimal("0"),
                     input_tokens=usage.prompt_tokens,
                     output_tokens=0
                 )
-                deduct_ai_credits(shop_id=self.shop_id, credits=credits_to_deduct)
                 
                 self._log_usage(
                     usage_type=AIModelUsage.EMBEDDING,
@@ -270,7 +267,7 @@ class AIGateway:
                     prompt_tokens=usage.prompt_tokens,
                     completion_tokens=0,
                     usd_cost=usd_cost,
-                    credits_deducted=credits_to_deduct
+                    credits_deducted=Decimal("0")
                 )
 
             return response.data[0].embedding

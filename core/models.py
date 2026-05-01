@@ -38,6 +38,13 @@ class TenantModel(SoftDeleteModel):
         abstract = True
 
 
+class VectorStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    CREATED = "CREATED", "Created"
+    SKIPPED = "SKIPPED", "Skipped"
+    FAILED = "FAILED", "Failed"
+
+
 class AIModelProvider(models.TextChoices):
     OPENAI = "OPENAI", "OpenAI"
     ANTHROPIC = "ANTHROPIC", "Anthropic"
