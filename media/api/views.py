@@ -125,7 +125,7 @@ class MediaListView(generics.ListAPIView):
     )
     def get_queryset(self):
         shop_id = getattr(self.request, "tenant_id", None)
-        return Media.objects.filter(shop_id=shop_id, deleted_at__isnull=True).order_by('-created_at')
+        return Media.objects.filter(shop_id=shop_id, deleted_at__isnull=True).prefetch_related('product_links__product').order_by('-created_at')
 
 
 class MediaDeleteView(APIView):

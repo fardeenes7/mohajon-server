@@ -45,7 +45,7 @@ def generate_presigned_upload_url(
     each other's assets even if they guess the key format.
     """
     file_ext = Path(filename).suffix.lower()
-    allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
     if file_ext not in allowed_extensions:
         raise ValueError(f"File type '{file_ext}' is not allowed.")
 

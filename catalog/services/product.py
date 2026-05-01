@@ -79,6 +79,7 @@ def product_create(*, shop_id: str, user_id, **data) -> "Product":  # noqa: F821
         )
 
     with transaction.atomic():
+        media_ids = data.pop("media_ids", [])
         product = Product(
             shop_id=shop_id,
             tenant_id=shop_id,
@@ -88,6 +89,17 @@ def product_create(*, shop_id: str, user_id, **data) -> "Product":  # noqa: F821
             product.slug = slugify(product.name)
 
         product.save()
+
+        # ── Attach Media ──────────────────────────────────────────────────
+        if media_ids:
+            for index, m_id in enumerate(media_ids):
+                product_media_attach(
+                    product_id=str(product.id),
+                    shop_id=shop_id,
+                    media_id=str(m_id),
+                    sort_order=index,
+                    is_thumbnail=(index == 0)
+                )
 
         # ── Auto-generate SKU if not provided ─────────────────────────────
         requested_sku = data.get("sku", "").strip()
@@ -104,12 +116,42 @@ def product_create(*, shop_id: str, user_id, **data) -> "Product":  # noqa: F821
 
 
 def product_update(*, product_id: str, shop_id: str, **data) -> "Product":  # noqa: F821
-    from catalog.models import Product
+    from catalog.models import Product, ProductMedia
+    import logging
 
-    product = Product.objects.get(id=product_id, shop_id=shop_id, deleted_at__isnull=True)
-    for field, value in data.items():
-        setattr(product, field, value)
-    product.save()
+    logger = logging.getLogger(__name__)
+
+    with transaction.atomic():
+        product = Product.objects.get(id=product_id, shop_id=shop_id, deleted_at__isnull=True)
+        
+        if "media_ids" in data:
+            media_ids = data.pop("media_ids")
+            if media_ids is not None:
+                # Synchronize media: soft-delete existing links and re-attach new ones
+                logger.info(f"Syncing {len(media_ids)} media items for product {product.id}")
+                product.product_media.all().delete()
+                
+                # Create new links in order
+                new_links = [
+                    ProductMedia(
+                        product=product,
+                        media_id=m_id,
+                        shop_id=shop_id,
+                        tenant_id=shop_id,
+                        sort_order=index,
+                        is_thumbnail=(index == 0)
+                    )
+                    for index, m_id in enumerate(media_ids)
+                ]
+                ProductMedia.objects.bulk_create(new_links)
+
+        # Update other fields, avoiding structural ones
+        for field, value in data.items():
+            if hasattr(product, field) and field not in ["id", "shop", "tenant_id"]:
+                setattr(product, field, value)
+        
+        product.save()
+
     return product
 
 

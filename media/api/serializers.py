@@ -2,8 +2,14 @@ from rest_framework import serializers
 from media.models import Media
 
 
+class ProductLinkSerializer(serializers.Serializer):
+    id = serializers.UUIDField(source="product.id")
+    name = serializers.CharField(source="product.name")
+
 class MediaSerializer(serializers.ModelSerializer):
     """Read serializer for Media objects returned to the client."""
+    
+    connected_products = ProductLinkSerializer(source="product_links", many=True, read_only=True)
 
     class Meta:
         model = Media
@@ -17,6 +23,7 @@ class MediaSerializer(serializers.ModelSerializer):
             "mime_type",
             "processing_status",
             "created_at",
+            "connected_products",
         ]
         read_only_fields = fields
 
@@ -28,7 +35,7 @@ class PresignedUploadRequestSerializer(serializers.Serializer):
     content_type = serializers.CharField(max_length=127)
 
     def validate_content_type(self, value):
-        allowed = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"}
+        allowed = {"image/jpeg", "image/png", "image/gif", "image/webp"}
         if value not in allowed:
             raise serializers.ValidationError(
                 f"Content type '{value}' is not permitted. Allowed: {', '.join(allowed)}"

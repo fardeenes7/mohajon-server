@@ -8,7 +8,7 @@ from media.models import Media
 class MediaBriefSerializer(serializers.ModelSerializer):
     class Meta:
         model = Media
-        fields = ["id", "cdn_url", "width", "height", "processing_status"]
+        fields = ["id", "cdn_url", "width", "height", "processing_status", "original_filename"]
         read_only_fields = fields
 
 
@@ -177,6 +177,9 @@ class ProductWriteSerializer(serializers.Serializer):
     seo_title = serializers.CharField(max_length=120, default="", allow_blank=True)
     seo_description = serializers.CharField(max_length=320, default="", allow_blank=True)
     sort_order = serializers.IntegerField(default=0)
+    media_ids = serializers.ListField(
+        child=serializers.UUIDField(), required=False
+    )
 
 
 class ProductBulkUpdateItemSerializer(serializers.Serializer):
