@@ -2,7 +2,9 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from fraud.models import FraudReport, FraudConfig
+from fraud.models import FraudEventType
 from fraud.services.risk import check_customer_risk
+from fraud.services.fraud_scoring import dispatch_fraud_event
 from shops.models import Shop
 
 class FraudViewSet(viewsets.ViewSet):
@@ -34,6 +36,8 @@ class FraudViewSet(viewsets.ViewSet):
         customer_name = request.data.get('customer_name', '')
         reason = request.data.get('reason')
         notes = request.data.get('notes', '')
+        order_id = request.data.get('order_id')
+        merchant_id = request.data.get('merchant_id') or getattr(request.user, "id", None)
         
         shop_id = getattr(request, 'tenant_id', None)
         if not shop_id:
@@ -47,8 +51,22 @@ class FraudViewSet(viewsets.ViewSet):
             phone_number=phone_number,
             customer_name=customer_name,
             reason=reason,
-            notes=notes
+            notes=notes,
+            order_id=order_id,
+            merchant_id=merchant_id,
         )
+        if order_id:
+            from orders.models import Order
+
+            order = Order.objects.filter(id=order_id).select_related("phone_identity", "user").first()
+            if order:
+                dispatch_fraud_event(
+                    order,
+                    event_type=FraudEventType.FRAUD_REPORT_ADDED,
+                    base_penalty=report.weight,
+                    metadata={"report_id": str(report.id), "reason": reason, "notes": notes},
+                )
+
         return Response({"status": "Reported successfully", "id": str(report.id)})
 
     @action(detail=False, methods=['get', 'patch'])

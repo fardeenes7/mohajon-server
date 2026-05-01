@@ -90,4 +90,13 @@ def order_transition(
             "actor_role": actor_role,
         },
     )
+
+    if to_status in {OrderStatus.CANCELLED, OrderStatus.RTO_RETURNED}:
+        from fraud.models import FraudEventType
+        from fraud.services.fraud_scoring import dispatch_fraud_event
+
+        if to_status == OrderStatus.CANCELLED:
+            dispatch_fraud_event(order, event_type=FraudEventType.ORDER_CANCELLED, base_penalty=2)
+        if to_status == OrderStatus.RTO_RETURNED:
+            dispatch_fraud_event(order, event_type=FraudEventType.DELIVERY_FAILED, base_penalty=20)
     return order

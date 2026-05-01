@@ -1,7 +1,10 @@
-from django.db import models
-from django.contrib.auth.models import AbstractUser, BaseUserManager
-from django.utils.translation import gettext_lazy as _
+import hashlib
 import uuid
+
+from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.db import models
+from django.utils.translation import gettext_lazy as _
+
 from core.models import SoftDeleteModel
 
 class UserManager(BaseUserManager):
@@ -53,3 +56,78 @@ class User(AbstractUser, SoftDeleteModel):
 
     def __str__(self):
         return self.email
+
+
+def normalize_phone(phone_number: str) -> str:
+    return "".join(filter(str.isdigit, phone_number or ""))
+
+
+def hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+class PhoneIdentity(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="phone_identities")
+    phone_number = models.CharField(max_length=20, unique=True, db_index=True)
+    phone_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    phone_suffix = models.CharField(max_length=4, db_index=True)
+    is_verified = models.BooleanField(default=False)
+    trust_score = models.IntegerField(default=0)
+    last_verified_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["phone_number"], name="phone_identity_phone_idx"),
+            models.Index(fields=["phone_suffix"], name="phone_identity_suffix_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        normalized = normalize_phone(self.phone_number)
+        self.phone_number = normalized
+        self.phone_hash = hash_text(normalized)
+        self.phone_suffix = normalized[-4:] if len(normalized) >= 4 else normalized
+        super().save(*args, **kwargs)
+
+
+class Address(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="addresses")
+    contact_name = models.CharField(max_length=255)
+    contact_phone = models.CharField(max_length=20)
+    street = models.TextField()
+    city = models.CharField(max_length=100)
+    postal_code = models.CharField(max_length=20, blank=True)
+    address_hash = models.CharField(max_length=64, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user"], name="address_user_idx"),
+            models.Index(fields=["address_hash"], name="address_hash_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        normalized_addr = f"{self.street.lower().strip()}|{self.city.lower().strip()}|{self.postal_code.lower().strip()}"
+        self.address_hash = hash_text(normalized_addr)
+        super().save(*args, **kwargs)
+
+
+class SocialAccount(models.Model):
+    PROVIDER_FACEBOOK = "FACEBOOK"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="social_accounts")
+    provider = models.CharField(max_length=20, default=PROVIDER_FACEBOOK)
+    provider_account_id = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "provider"], name="uq_user_provider"),
+            models.UniqueConstraint(fields=["provider", "provider_account_id"], name="uq_provider_account"),
+        ]
+        indexes = [
+            models.Index(fields=["provider", "provider_account_id"], name="social_provider_account_idx"),
+        ]

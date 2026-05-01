@@ -6,7 +6,7 @@ from typing import Sequence
 from django.db import transaction
 
 from catalog.models import Product, ProductVariant
-from orders.models import Order, OrderItem, OrderStatus
+from orders.models import Order, OrderItem, OrderStatus, VerificationMethod
 from orders.services.reservations import reservation_expires_at, reservation_store, reserve_stock_atomic
 from shops.models import Shop, ShopSettings
 
@@ -59,6 +59,11 @@ def checkout_create_order(
     items: Sequence[dict],
     customer_profile_id: str | None = None,
     payment_method: str | None = None,
+    actor_user_id: str | None = None,
+    phone_identity_id: str | None = None,
+    actor_reference: str | None = None,
+    is_verified: bool = False,
+    verification_method: str | None = None,
 ) -> Order:
     shop = Shop.objects.get(id=shop_id, deleted_at__isnull=True)
     try:
@@ -85,6 +90,8 @@ def checkout_create_order(
             shop=shop,
             tenant_id=shop.id,
             customer_profile_id=customer_profile_id,
+            user_id=actor_user_id,
+            phone_identity_id=phone_identity_id,
             status=OrderStatus.AWAITING_PAYMENT,
             subtotal_amount=Decimal("0.00"),
             shipping_amount=Decimal("0.00"),
@@ -93,6 +100,9 @@ def checkout_create_order(
             currency=shop.base_currency,
             payment_method=normalized_payment_method,
             lock_expires_at=expiry_at,
+            actor_reference=actor_reference or "",
+            is_verified=is_verified,
+            verification_method=verification_method or VerificationMethod.NONE,
         )
 
         for raw_item in items:
@@ -140,7 +150,26 @@ def checkout_create_order(
 
         order.subtotal_amount = subtotal
         order.total_amount = subtotal
-        order.save(update_fields=["subtotal_amount", "total_amount", "lock_expires_at", "updated_at"])
+
+        if order.phone_identity_id:
+            from fraud.services.fraud_scoring import calculate_order_confidence
+
+            order.confidence_level = calculate_order_confidence(order)
+
+        order.save(
+            update_fields=[
+                "subtotal_amount",
+                "total_amount",
+                "lock_expires_at",
+                "updated_at",
+                "confidence_level",
+            ]
+        )
+
+        from fraud.models import FraudEventType
+        from fraud.services.fraud_scoring import dispatch_fraud_event
+
+        dispatch_fraud_event(order, event_type=FraudEventType.ORDER_CREATED)
 
         reservation_store(order=order, minutes=reservation_minutes)
 

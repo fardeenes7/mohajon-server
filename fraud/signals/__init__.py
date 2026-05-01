@@ -2,6 +2,9 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from fraud.models import FraudReport, GlobalFraudPool, FraudConfig
 from django.db import transaction
+from users.models import Address, PhoneIdentity
+
+from fraud.services.identity_linking import link_identity_on_address_create, link_identity_on_phone_claim
 
 @receiver(post_save, sender=FraudReport)
 def sync_fraud_to_global_pool(sender, instance, created, **kwargs):
@@ -27,3 +30,15 @@ def sync_fraud_to_global_pool(sender, instance, created, **kwargs):
                 pool.unpaid_count += 1
                 
             pool.save()
+
+
+@receiver(post_save, sender=Address)
+def link_identity_on_address(sender, instance, created, **kwargs):
+    if created:
+        link_identity_on_address_create(instance)
+
+
+@receiver(post_save, sender=PhoneIdentity)
+def link_identity_on_phone(sender, instance, created, **kwargs):
+    if instance.is_verified and instance.user_id:
+        link_identity_on_phone_claim(instance, instance.user)
