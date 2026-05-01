@@ -42,6 +42,11 @@ class PaymentGatewayConfigSerializer(serializers.ModelSerializer):
 
 class PaymentMethodSerializer(serializers.ModelSerializer):
     method_display = serializers.CharField(source='get_method_display', read_only=True)
+
+    def validate_method(self, value):
+        if value not in PaymentMethod.ALLOWED_METHODS:
+            raise serializers.ValidationError("Unsupported payment method.")
+        return value
     
     class Meta:
         model = PaymentMethod

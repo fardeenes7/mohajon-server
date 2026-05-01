@@ -53,6 +53,8 @@ def toggle_payment_method(shop: Shop, method: str, is_enabled: bool):
     """
     Enables or disables a payment method for the storefront.
     """
+    if method not in PaymentMethod.ALLOWED_METHODS:
+        raise ValueError("Unsupported payment method.")
     pm, _ = PaymentMethod.objects.get_or_create(
         shop=shop,
         method=method,
@@ -61,6 +63,20 @@ def toggle_payment_method(shop: Shop, method: str, is_enabled: bool):
     pm.is_enabled = is_enabled
     pm.save()
     return pm
+
+def ensure_shop_payment_methods(shop: Shop):
+    """
+    Ensure every allowed payment method exists for the shop.
+    """
+    for index, method in enumerate(PaymentMethod.ALLOWED_METHODS):
+        PaymentMethod.objects.get_or_create(
+            shop=shop,
+            method=method,
+            defaults={
+                'tenant_id': shop.id,
+                'display_order': index,
+            },
+        )
 
 def get_storefront_payment_methods(shop: Shop):
     """

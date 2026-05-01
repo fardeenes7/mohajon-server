@@ -1,4 +1,5 @@
 from rest_framework import viewsets, status, generics
+from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -68,7 +69,7 @@ class AICreditPackageViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AICreditPackageSerializer
     queryset = AICreditPackage.objects.filter(is_active=True).order_by("sort_order")
 from billing.services.subscription import get_subscription_context
-from billing.services.gateway import set_gateway_credentials
+from billing.services.gateway import set_gateway_credentials, ensure_shop_payment_methods
 from billing.services.developer import create_api_token
 
 class BillingContextViewSet(viewsets.ViewSet):
@@ -131,7 +132,56 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         shop_id = ShopDetailView()._resolve_shop_id(self.request)
-        return PaymentMethod.objects.filter(shop_id=shop_id, deleted_at__isnull=True)
+        from shops.models import Shop
+        shop = Shop.objects.get(id=shop_id)
+        ensure_shop_payment_methods(shop)
+        return PaymentMethod.objects.filter(
+            shop_id=shop_id,
+            deleted_at__isnull=True,
+            method__in=PaymentMethod.ALLOWED_METHODS,
+        )
+
+    def perform_create(self, serializer):
+        shop_id = ShopDetailView()._resolve_shop_id(self.request)
+        serializer.save(shop_id=shop_id, tenant_id=shop_id)
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        is_enabled = serializer.validated_data.get(
+            'is_enabled',
+            instance.is_enabled,
+        )
+        if instance.is_enabled and not is_enabled:
+            shop_id = ShopDetailView()._resolve_shop_id(self.request)
+            
+            active_gateways = set(PaymentGatewayConfig.objects.filter(
+                shop_id=shop_id,
+                is_active=True,
+                deleted_at__isnull=True,
+            ).values_list('gateway', flat=True))
+            
+            is_currently_valid = instance.method == PaymentMethod.METHOD_COD or instance.method in active_gateways
+            
+            if is_currently_valid:
+                enabled_methods = PaymentMethod.objects.filter(
+                    shop_id=shop_id,
+                    is_enabled=True,
+                    deleted_at__isnull=True,
+                ).values_list('method', flat=True)
+                
+                valid_enabled_count = sum(
+                    1 for m in enabled_methods if m == PaymentMethod.METHOD_COD or m in active_gateways
+                )
+                
+                if valid_enabled_count <= 1:
+                    raise ValidationError(
+                        {
+                            "is_enabled": (
+                                "At least one connected payment method must remain active."
+                            )
+                        }
+                    )
+        serializer.save()
 
 class APITokenViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]

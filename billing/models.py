@@ -162,14 +162,20 @@ class PaymentGatewayConfig(TenantModel):
     """
 
     GATEWAY_BKASH = 'BKASH'
+    GATEWAY_NAGAD = 'NAGAD'
     GATEWAY_SSLCOMMERZ = 'SSLCOMMERZ'
     GATEWAY_PORTPOS = 'PORTPOS'
+    GATEWAY_POLAR = 'POLAR'
+    GATEWAY_STRIPE = 'STRIPE'
     GATEWAY_MANUAL = 'MANUAL'
 
     GATEWAY_CHOICES = [
         (GATEWAY_BKASH, 'bKash (Tokenized)'),
+        (GATEWAY_NAGAD, 'Nagad'),
         (GATEWAY_SSLCOMMERZ, 'SSLCommerz'),
         (GATEWAY_PORTPOS, 'PortPOS'),
+        (GATEWAY_POLAR, 'Polar'),
+        (GATEWAY_STRIPE, 'Stripe'),
         (GATEWAY_MANUAL, 'Manual / Bank Transfer'),
     ]
 
@@ -236,17 +242,29 @@ class PaymentMethod(TenantModel):
     METHOD_COD = 'COD'
     METHOD_BKASH = 'BKASH'
     METHOD_SSLCOMMERZ = 'SSLCOMMERZ'
+    METHOD_NAGAD = 'NAGAD'
     METHOD_PORTPOS = 'PORTPOS'
-    METHOD_BANK_TRANSFER = 'BANK_TRANSFER'
-    METHOD_CUSTOM = 'CUSTOM'
+    METHOD_POLAR = 'POLAR'
+    METHOD_STRIPE = 'STRIPE'
 
     METHOD_CHOICES = [
         (METHOD_COD, 'Cash on Delivery'),
         (METHOD_BKASH, 'bKash'),
+        (METHOD_NAGAD, 'Nagad'),
         (METHOD_SSLCOMMERZ, 'SSLCommerz / Card'),
         (METHOD_PORTPOS, 'PortPOS'),
-        (METHOD_BANK_TRANSFER, 'Bank Transfer'),
-        (METHOD_CUSTOM, 'Custom Manual Payment'),
+        (METHOD_POLAR, 'Polar'),
+        (METHOD_STRIPE, 'Stripe'),
+    ]
+
+    ALLOWED_METHODS = [
+        METHOD_COD,
+        METHOD_BKASH,
+        METHOD_NAGAD,
+        METHOD_SSLCOMMERZ,
+        METHOD_PORTPOS,
+        METHOD_POLAR,
+        METHOD_STRIPE,
     ]
 
     # Who absorbs the gateway fee — merchant or customer
