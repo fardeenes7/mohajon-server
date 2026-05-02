@@ -252,6 +252,20 @@ def variant_create(*, product_id: str, shop_id: str, user_id, **data) -> "Produc
             )
         variant.save(update_fields=["sku"])
 
+        # ── Initialize StockRecord for Default Location ──────────────────
+        # TODO: After MVP, we might want to initialize records for all active locations
+        from shops.models import StockLocation
+        from catalog.models import StockRecord
+        default_loc = StockLocation.objects.filter(shop_id=shop_id, is_default=True).first()
+        if default_loc:
+            StockRecord.objects.get_or_create(
+                shop_id=shop_id,
+                tenant_id=shop_id,
+                variant=variant,
+                location=default_loc,
+                defaults={'quantity': data.get('stock_quantity', 0)}
+            )
+
     return variant
 
 
@@ -266,20 +280,51 @@ def variant_update_stock(
 ) -> "ProductVariant":  # noqa: F821
     """
     Atomically adjusts variant stock and writes an InventoryLog entry.
-    Prevents stock from going below zero.
+    Prevents stock from going below zero at the specific location.
     """
-    from catalog.models import InventoryLog, ProductVariant
+    from catalog.models import InventoryLog, ProductVariant, StockRecord
+    from shops.models import ShopMember, StockLocation
 
     with transaction.atomic():
         variant = ProductVariant.objects.select_for_update().get(
             id=variant_id, shop_id=shop_id, deleted_at__isnull=True
         )
-        new_qty = variant.stock_quantity + delta
+        
+        # Determine target location: User's assigned location or Shop's default
+        # TODO: Support explicit location_id in the API after MVP launch
+        target_location = None
+        if user_id:
+            member = ShopMember.objects.filter(shop_id=shop_id, user_id=user_id).first()
+            if member and member.location_id:
+                target_location = member.location
+        
+        if not target_location:
+            target_location = StockLocation.objects.filter(shop_id=shop_id, is_default=True).first()
+
+        if not target_location:
+            raise ValueError("No valid stock location found for this shop.")
+
+        # Adjust specific StockRecord
+        stock_record, _ = StockRecord.objects.select_for_update().get_or_create(
+            shop_id=shop_id,
+            tenant_id=shop_id,
+            variant=variant,
+            location=target_location
+        )
+        
+        new_qty = stock_record.quantity + delta
         if new_qty < 0:
             raise ValueError(
-                f"Insufficient stock. Current: {variant.stock_quantity}, attempted delta: {delta}"
+                f"Insufficient stock at {target_location.name}. "
+                f"Current: {stock_record.quantity}, attempted delta: {delta}"
             )
-        variant.stock_quantity = new_qty
+        
+        stock_record.quantity = new_qty
+        stock_record.save(update_fields=["quantity", "updated_at"])
+
+        # Also update the 'legacy' global field for MVP compatibility
+        # TODO: Remove variant.stock_quantity after full migration to StockRecord
+        variant.stock_quantity = variant.global_stock
         variant.save(update_fields=["stock_quantity", "updated_at"])
 
         InventoryLog.objects.create(
@@ -289,6 +334,7 @@ def variant_update_stock(
             reason=reason,
             reference_id=reference_id,
             created_by_id=user_id,
+            # TODO: Add location_id to InventoryLog after MVP
         )
 
     return variant
@@ -316,17 +362,43 @@ def variant_bulk_update(
                 
                 # If stock_quantity is being changed explicitly via bulk edit
                 new_stock = data.pop("stock_quantity", None)
-                if new_stock is not None and new_stock != variant.stock_quantity:
-                    delta = new_stock - variant.stock_quantity
-                    variant.stock_quantity = new_stock
-                    InventoryLog.objects.create(
-                        shop_id=shop_id,
-                        variant=variant,
-                        delta=delta,
-                        reason="BULK_ADJUSTMENT",
-                        reference_id="bulk_edit",
-                        created_by_id=user_id,
-                    )
+                if new_stock is not None:
+                    # Determine target location
+                    from shops.models import ShopMember, StockLocation
+                    from catalog.models import StockRecord
+
+                    target_location = None
+                    if user_id:
+                        member = ShopMember.objects.filter(shop_id=shop_id, user_id=user_id).first()
+                        if member and member.location_id:
+                            target_location = member.location
+                    
+                    if not target_location:
+                        target_location = StockLocation.objects.filter(shop_id=shop_id, is_default=True).first()
+
+                    if target_location:
+                        stock_record, _ = StockRecord.objects.select_for_update().get_or_create(
+                            shop_id=shop_id,
+                            tenant_id=shop_id,
+                            variant=variant,
+                            location=target_location
+                        )
+                        delta = new_stock - stock_record.quantity
+                        if delta != 0:
+                            stock_record.quantity = new_stock
+                            stock_record.save(update_fields=["quantity", "updated_at"])
+                            
+                            # Sync legacy field
+                            variant.stock_quantity = variant.global_stock
+                            
+                            InventoryLog.objects.create(
+                                shop_id=shop_id,
+                                variant=variant,
+                                delta=delta,
+                                reason="BULK_ADJUSTMENT",
+                                reference_id="bulk_edit",
+                                created_by_id=user_id,
+                            )
 
                 for field, value in data.items():
                     setattr(variant, field, value)

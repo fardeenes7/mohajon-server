@@ -2,6 +2,7 @@ from django.db import models
 import uuid
 from core.models import SoftDeleteModel, TenantModel
 from django.conf import settings
+from .location import StockLocation, LocationType
 
 class SubscriptionPlan(models.Model):
     """
@@ -77,6 +78,18 @@ class ShopMember(SoftDeleteModel):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='shop_memberships')
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='members')
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='CASHIER')
+    
+    # Location Assignment (New)
+    # Note: Owners are usually assigned to the default location but see all.
+    # POS mode View Global Stock bypasses this restriction.
+    location = models.ForeignKey(
+        StockLocation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='members',
+        help_text="Primary location this member works at."
+    )
     
     class Meta:
         unique_together = ('user', 'shop')

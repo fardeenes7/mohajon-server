@@ -28,6 +28,8 @@ class OrderConfidenceLevel(models.TextChoices):
 
 class VerificationMethod(models.TextChoices):
     OTP = 'OTP', 'OTP Verification'
+    CALL = 'CALL', 'Phone Call Verification'
+    SOCIAL = 'SOCIAL', 'Social Media Auto-Verification'
     COURIER = 'COURIER', 'Courier Confirmation'
     NONE = 'NONE', 'None'
 

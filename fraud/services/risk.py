@@ -3,61 +3,73 @@ import hashlib
 from fraud.models import FraudConfig, FraudProfile, FraudTargetType, GlobalFraudPool
 from users.models import PhoneIdentity
 
-def check_customer_risk(shop, phone_number):
+def check_customer_risk(shop, phone_number, actor_reference=None):
     """
-    Checks the global fraud pool for a phone number.
+    Checks the global fraud pool for a phone number and the local actor profile.
     Returns a risk summary.
     """
-    if not phone_number:
-        return {"risk_score": 0, "is_high_risk": False, "reports_count": 0}
+    # TODO: Implement OTP verification for all COD orders to minimize fraud. 
+    # Currently skipped to minimize operating costs as per user request.
 
-    normalized_phone = "".join(filter(str.isdigit, phone_number))
-    phone_hash = hashlib.sha256(normalized_phone.encode()).hexdigest()
-    
+    risk_score = 0
+    is_high_risk = False
+    reports_count = 0
+    details = {}
+
     config, _ = FraudConfig.objects.get_or_create(shop=shop)
-    
-    # Opt-in check: You must contribute to see the global data
-    if not config.opt_in_pooling:
-        return {
-            "risk_score": 0, 
-            "is_high_risk": False, 
-            "reports_count": 0,
-            "message": "Opt-in to fraud pooling to see community data."
-        }
 
-    phone_identity = PhoneIdentity.objects.filter(phone_number=normalized_phone).only("id", "trust_score", "is_verified").first()
-    if phone_identity:
-        profile = FraudProfile.objects.filter(
-            target_type=FraudTargetType.PHONE,
-            target_id=str(phone_identity.id),
-        ).only("risk_score").first()
-        risk_score = profile.risk_score if profile else 0
-        return {
-            "risk_score": risk_score,
-            "is_high_risk": risk_score >= config.rto_threshold,
-            "reports_count": risk_score,
-            "details": {
-                "trust_score": phone_identity.trust_score,
-                "is_verified": phone_identity.is_verified,
-            },
-        }
+    # 1. Check Actor Reference (IP/Messenger PSID)
+    if actor_reference:
+        actor_profile = FraudProfile.objects.filter(
+            target_id=actor_reference
+        ).only("risk_score", "risk_level").first()
+        
+        if actor_profile:
+            risk_score = max(risk_score, actor_profile.risk_score)
+            if actor_profile.risk_level == FraudRiskLevel.HIGH:
+                is_high_risk = True
+            reports_count += actor_profile.risk_score
+            details["actor_risk"] = actor_profile.risk_score
 
-    try:
-        pool = GlobalFraudPool.objects.get(phone_hash=phone_hash)
-        total_reports = pool.rto_count + pool.fake_order_count + pool.harassment_count + pool.unpaid_count
+    # 2. Check Phone Number
+    if phone_number:
+        normalized_phone = "".join(filter(str.isdigit, phone_number))
+        phone_hash = hashlib.sha256(normalized_phone.encode()).hexdigest()
 
-        is_high_risk = pool.rto_count >= config.rto_threshold
+        phone_identity = PhoneIdentity.objects.filter(phone_number=normalized_phone).only("id", "trust_score", "is_verified").first()
+        
+        if phone_identity:
+            profile = FraudProfile.objects.filter(
+                target_type=FraudTargetType.PHONE,
+                target_id=str(phone_identity.id),
+            ).only("risk_score", "risk_level").first()
+            
+            if profile:
+                risk_score = max(risk_score, profile.risk_score)
+                if profile.risk_level == FraudRiskLevel.HIGH:
+                    is_high_risk = True
+                reports_count += profile.risk_score
+                details["phone_risk"] = profile.risk_score
+                details["is_verified"] = phone_identity.is_verified
 
-        return {
-            "risk_score": total_reports,
-            "is_high_risk": is_high_risk,
-            "reports_count": total_reports,
-            "details": {
-                "rto": pool.rto_count,
-                "fake_order": pool.fake_order_count,
-                "harassment": pool.harassment_count,
-                "unpaid": pool.unpaid_count,
-            },
-        }
-    except GlobalFraudPool.DoesNotExist:
-        return {"risk_score": 0, "is_high_risk": False, "reports_count": 0}
+        # 3. Check Global Pool (if opted in)
+        if config.opt_in_pooling:
+            try:
+                pool = GlobalFraudPool.objects.get(phone_hash=phone_hash)
+                total_pool_reports = pool.rto_count + pool.fake_order_count + pool.harassment_count + pool.unpaid_count
+                
+                risk_score = max(risk_score, total_pool_reports)
+                if pool.rto_count >= config.rto_threshold:
+                    is_high_risk = True
+                
+                reports_count += total_pool_reports
+                details["global_reports"] = total_pool_reports
+            except GlobalFraudPool.DoesNotExist:
+                pass
+
+    return {
+        "risk_score": risk_score,
+        "is_high_risk": is_high_risk or (risk_score >= config.rto_threshold),
+        "reports_count": reports_count,
+        "details": details,
+    }

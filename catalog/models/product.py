@@ -155,10 +155,13 @@ class Product(TenantModel):
 
     @property
     def total_stock(self) -> int:
-        """Master stock = physical sum of all active variant stocks."""
+        """
+        Master stock = physical sum of all active variant stocks across all locations.
+        TODO: In the future, this might filter by the user's assigned location 
+        for storefront visibility, but POS always sees the global sum.
+        """
         return (
-            self.variants.filter(
-                is_active=True, deleted_at__isnull=True
-            ).aggregate(total=models.Sum("stock_quantity"))["total"]
+            self.variants.filter(is_active=True, deleted_at__isnull=True)
+            .aggregate(total=models.Sum("stock_records__quantity"))["total"]
             or 0
         )

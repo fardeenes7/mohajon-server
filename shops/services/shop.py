@@ -1,4 +1,4 @@
-from shops.models import Shop, ShopMember
+from shops.models import Shop, ShopMember, StockLocation, LocationType
 from django.db import transaction
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -29,9 +29,19 @@ def shop_create(*, name: str, subdomain: str, owner_user) -> Shop:
         
     with transaction.atomic():
         shop = Shop.objects.create(name=name, subdomain=slug)
+        
+        # Create default location (Primary Branch)
+        default_location = StockLocation.objects.create(
+            shop=shop,
+            name="Primary Branch",
+            location_type=LocationType.BRANCH,
+            is_default=True
+        )
+
         ShopMember.objects.create(
             user=owner_user,
             shop=shop,
-            role='OWNER'
+            role='OWNER',
+            location=default_location
         )
     return shop

@@ -377,11 +377,11 @@ def _confirm_order(
     # Check fraud risk
     try:
         shop = Shop.objects.get(id=shop_id)
-        risk = check_customer_risk(shop, shipping_address.get("phone"))
+        risk = check_customer_risk(shop, shipping_address.get("phone"), actor_reference=psid)
         fraud_config, _ = FraudConfig.objects.get_or_create(shop=shop)
         
         if risk["is_high_risk"] and fraud_config.block_high_risk:
-            return {"error": "This phone number is flagged for high risk. COD is currently disabled for this number."}
+            return {"error": "This account or phone number is flagged for high risk. COD is currently disabled."}
     except Shop.DoesNotExist:
         return {"error": "Shop not found."}
 
@@ -390,6 +390,7 @@ def _confirm_order(
             shop_id=shop_id,
             items=items,
             payment_method="COD" if payment_method == "COD" else "PREPAID",
+            actor_reference=psid,
         )
     except ValueError as exc:
         return {"error": str(exc)}

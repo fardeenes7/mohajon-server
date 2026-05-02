@@ -60,7 +60,13 @@ class ProductVariant(TenantModel):
     )
 
     # ── Inventory ──────────────────────────────────────────────────────────
-    stock_quantity = models.PositiveIntegerField(default=0)
+    # TODO: Refactor into StockRecord entirely after MVP launch.
+    # Currently, this field acts as 'Global' stock for the MVP storefront.
+    # New StockRecord model should be used for location-specific queries.
+    stock_quantity = models.PositiveIntegerField(
+        default=0,
+        help_text="Global/Legacy stock. Use StockRecord for multi-location tracking."
+    )
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -109,3 +115,15 @@ class ProductVariant(TenantModel):
     def effective_purchase_price(self):
         """Returns variant purchase_price if overridden, else master product purchase_price."""
         return self.purchase_price_override if self.purchase_price_override is not None else self.product.purchase_price
+
+    def get_stock_at_location(self, location_id):
+        """Returns stock quantity for a specific location."""
+        return self.stock_records.filter(location_id=location_id).values_list('quantity', flat=True).first() or 0
+
+    @property
+    def global_stock(self):
+        """
+        Sum of stock across ALL locations.
+        Used by POS mode 'View Global Stock' regardless of user assignment.
+        """
+        return self.stock_records.aggregate(total=models.Sum('quantity'))['total'] or 0

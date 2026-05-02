@@ -86,6 +86,22 @@ def checkout_create_order(
     subtotal = Decimal("0.00")
 
     with transaction.atomic():
+        # Resolve PhoneIdentity if missing but customer profile is present
+        if not phone_identity_id and customer_profile_id:
+            from shops.models import CustomerProfile
+            from users.models import PhoneIdentity
+            
+            try:
+                cp = CustomerProfile.objects.get(id=customer_profile_id)
+                # Ensure a global PhoneIdentity exists for this customer
+                phone_identity, _ = PhoneIdentity.objects.get_or_create(
+                    phone_number=cp.phone_number,
+                    defaults={"is_verified": False}
+                )
+                phone_identity_id = str(phone_identity.id)
+            except CustomerProfile.DoesNotExist:
+                pass
+
         order = Order.objects.create(
             shop=shop,
             tenant_id=shop.id,
@@ -163,6 +179,8 @@ def checkout_create_order(
                 "lock_expires_at",
                 "updated_at",
                 "confidence_level",
+                "is_verified",
+                "verification_method",
             ]
         )
 

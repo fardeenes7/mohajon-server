@@ -88,6 +88,9 @@ def _record_event(
 
 
 def calculate_order_confidence(order) -> str:
+    # TODO: Once OTP for COD is implemented to minimize operating costs, 
+    # require OTP for all HIGH confidence levels unless manually bypassed by staff.
+
     if order.is_verified and order.phone_identity_id:
         phone_identity = PhoneIdentity.objects.filter(id=order.phone_identity_id).only("trust_score", "user_id", "is_verified").first()
     else:
@@ -101,14 +104,42 @@ def calculate_order_confidence(order) -> str:
             target_id=actor_target.target_id,
         ).only("risk_score").first()
 
+    # 1. High Risk Block
     if actor_profile and actor_profile.risk_score > 50:
         return OrderConfidenceLevel.LOW
 
+    # 2. WhatsApp Auto-Verification
+    # If the actor_reference (phone number) matches the shipping phone, it's auto-verified.
+    from orders.models import VerificationMethod
+    if not order.is_verified and order.actor_reference and order.phone_identity_id:
+        actor_digits = "".join(filter(str.isdigit, order.actor_reference))
+        # PhoneIdentity.phone_number is already normalized to digits in its save() method
+        phone_identity_obj = phone_identity or PhoneIdentity.objects.filter(id=order.phone_identity_id).only("phone_number").first()
+        
+        if actor_digits and phone_identity_obj and actor_digits == phone_identity_obj.phone_number:
+            order.is_verified = True
+            order.verification_method = VerificationMethod.SOCIAL
+
+    # 3. Verification Boost
+    
+    if order.is_verified:
+        # OTP and WhatsApp/Social match are strongest
+        if order.verification_method in {VerificationMethod.OTP, VerificationMethod.SOCIAL}:
+            return OrderConfidenceLevel.HIGH
+        
+        # Phone call verification (Manual/Messenger/WhatsApp)
+        if order.verification_method == VerificationMethod.CALL:
+            if phone_identity and phone_identity.trust_score >= 0:
+                return OrderConfidenceLevel.MEDIUM
+            return OrderConfidenceLevel.LOW
+
+    # 3. Trust Score Logic (for unverified but potentially good customers)
     if phone_identity and phone_identity.is_verified and phone_identity.trust_score > 0:
         if order.user_id and phone_identity.user_id == order.user_id:
             return OrderConfidenceLevel.HIGH
         return OrderConfidenceLevel.MEDIUM
 
+    # 4. Default for Social/Manual (Medium if no prior risk, else Low)
     if not order.is_verified:
         if not actor_profile or actor_profile.risk_score == 0:
             return OrderConfidenceLevel.MEDIUM

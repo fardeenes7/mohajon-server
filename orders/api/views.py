@@ -70,7 +70,7 @@ class StorefrontPaymentInvoiceDetailView(StorefrontPaymentInvoiceBaseView):
         if invoice.order.customer_profile:
             customer_phone = invoice.order.customer_profile.phone_number
             
-        risk = check_customer_risk(shop, customer_phone)
+        risk = check_customer_risk(shop, customer_phone, actor_reference=request.META.get('REMOTE_ADDR'))
         fraud_config, _ = FraudConfig.objects.get_or_create(shop=shop)
         
         payload["fraud_risk"] = risk
@@ -115,7 +115,7 @@ class StorefrontPaymentInvoiceCodConfirmView(StorefrontPaymentInvoiceBaseView):
         if invoice.order.customer_profile:
             customer_phone = invoice.order.customer_profile.phone_number
             
-        risk = check_customer_risk(shop, customer_phone)
+        risk = check_customer_risk(shop, customer_phone, actor_reference=request.META.get('REMOTE_ADDR'))
         fraud_config, _ = FraudConfig.objects.get_or_create(shop=shop)
         
         if risk['is_high_risk'] and fraud_config.block_high_risk:
@@ -169,6 +169,7 @@ class StorefrontCheckoutView(APIView):
                 items=items,
                 customer_profile_id=customer_profile_id,
                 payment_method=payment_method,
+                actor_reference=request.META.get('REMOTE_ADDR'),
             )
             return Response({
                 "id": order.id,
