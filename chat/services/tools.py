@@ -364,6 +364,7 @@ def _confirm_order(
     from orders.services.checkout import checkout_create_order
     from orders.services.transitions import order_transition
     from chat.services.bot_state import bot_state_clear_order_draft
+    from chat.models import ChannelChoices
     from fraud.services.risk import check_customer_risk
     from fraud.models import FraudConfig
     from shops.models import Shop
@@ -391,6 +392,13 @@ def _confirm_order(
             items=items,
             payment_method="COD" if payment_method == "COD" else "PREPAID",
             actor_reference=psid,
+            # Identity graph: the chat path is the only place these signals are
+            # captured (they were previously discarded after the risk check).
+            # channel_identity is the page-scoped PSID — a distinct value space
+            # from users.SocialAccount.provider_account_id.
+            shipping_address=shipping_address,
+            channel=ChannelChoices.FACEBOOK,
+            channel_identity=psid,
         )
     except ValueError as exc:
         return {"error": str(exc)}

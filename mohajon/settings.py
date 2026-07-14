@@ -79,6 +79,7 @@ INSTALLED_APPS = [
     'analytics',
     'affiliates',
     'fraud',
+    'identity',
 ]
 
 SITE_ID = 1

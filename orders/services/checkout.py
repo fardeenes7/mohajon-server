@@ -64,6 +64,9 @@ def checkout_create_order(
     actor_reference: str | None = None,
     is_verified: bool = False,
     verification_method: str | None = None,
+    shipping_address: dict | None = None,
+    channel: str | None = None,
+    channel_identity: str | None = None,
 ) -> Order:
     shop = Shop.objects.get(id=shop_id, deleted_at__isnull=True)
     try:
@@ -190,5 +193,21 @@ def checkout_create_order(
         dispatch_fraud_event(order, event_type=FraudEventType.ORDER_CREATED)
 
         reservation_store(order=order, minutes=reservation_minutes)
+
+        # ── Identity graph: capture an immutable snapshot synchronously, then
+        # resolve it into the global graph asynchronously once the order commits.
+        from identity.services.snapshot import create_order_identity_snapshot
+        from identity.tasks import resolve_order_identity_graph
+
+        create_order_identity_snapshot(
+            order=order,
+            shipping_address=shipping_address,
+            channel=channel,
+            channel_identity=channel_identity,
+            payment_method=normalized_payment_method,
+        )
+        transaction.on_commit(
+            lambda: resolve_order_identity_graph.delay(str(order.id))
+        )
 
     return order
