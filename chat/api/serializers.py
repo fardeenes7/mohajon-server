@@ -5,13 +5,13 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
-from chat.models import ChatMessage, FAQEntry
+from chat.models import Conversation, ChatMessage, FAQEntry
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatMessage
-        fields = ["id", "psid", "page_id", "direction", "message_text", "attachment_payload", "mid", "timestamp", "created_at"]
+        fields = ["id", "conversation", "direction", "text", "attachment_payload", "timestamp", "created_at"]
         read_only_fields = fields
 
 
@@ -22,10 +22,10 @@ class FAQEntrySerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
-class ConversationListSerializer(serializers.Serializer):
-    psid = serializers.CharField()
-    page_id = serializers.CharField()
-    last_ts = serializers.IntegerField()
+class ConversationListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Conversation
+        fields = ["id", "channel", "channel_identity", "metadata", "updated_at"]
 
 
 class HumanTakeoverSerializer(serializers.Serializer):
