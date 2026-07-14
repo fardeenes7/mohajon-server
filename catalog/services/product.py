@@ -222,6 +222,10 @@ def variant_create(*, product_id: str, shop_id: str, user_id, **data) -> "Produc
         raise ValueError("attribute_name_1 must be set before attribute_name_2.")
 
     with transaction.atomic():
+        from catalog.models import Product
+        if not Product.objects.filter(id=product_id, shop_id=shop_id, deleted_at__isnull=True).exists():
+            raise ValueError("Product not found or access denied.")
+            
         active_count = ProductVariant.objects.filter(
             product_id=product_id, deleted_at__isnull=True
         ).count()

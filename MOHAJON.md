@@ -82,4 +82,13 @@ The platform architecture splits AI generation and Chat mechanics into two disti
 - Dev and prod compose files are separate on purpose — do not merge them or rely on `docker-compose.override.yml` magic without discussing it here first.
 - `CONN_MAX_AGE` must remain `"0"` in all prod service definitions. Never increase this value while PgBouncer is in transaction mode.
 - CI (`build-backend-image.yml`) builds the `prod` target of the multi-stage `Dockerfile`. The `dev` target is never pushed to the registry.
-\n### Technical Debt (AI/Chat Refactor - July 2026)\n- **Greeting keyword pre-filter logic (`chat.services.greeting.py`)**: Untested. (Lost during messenger->chat app split).\n- **FAQEntry & ChatMessage schema validation**: Untested. Needs basic field constraints/creation testing ported from old messenger app.\n- **Facebook comment de-duplication (`chat.services.comment_autoreply.py`)**: Untested. Core auto-reply pipelines need to be validated in the new channel adapter structure.
+\n### Technical Debt (AI/Chat Refactor - July 2026)
+- **Greeting keyword pre-filter logic (`chat.services.greeting.py`)**: Untested. (Lost during messenger->chat app split).
+- **FAQEntry & ChatMessage schema validation**: Untested. Needs basic field constraints/creation testing ported from old messenger app.
+- **Facebook comment de-duplication (`chat.services.comment_autoreply.py`)**: Untested. Core auto-reply pipelines need to be validated in the new channel adapter structure.
+
+### Technical Debt (Catalog Audit - July 2026)
+- **Media/image attachment logic**: Untested during product creation.
+- **Soft-deletion assertions**: Untested (`deleted_at` field behavior).
+- **Category hierarchy depth / `sort_order` behavior**: Untested in nested trees.
+- **FTS relevance/ranking correctness**: Untested with multiple distinct products (only signal-fires and fallback-triggers were tested, not actual result quality/ranking).
