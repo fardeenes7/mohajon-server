@@ -23,9 +23,9 @@ from typing import Any
 from django.db import transaction
 from django.utils import timezone
 
-from core.models import AIModelUsage
-from core.services.ai_credits import has_sufficient_ai_credits
-from core.services.ai_gateway import AIGateway
+from ai.models import AIModelUsage
+from ai.services.ai_credits import has_sufficient_ai_credits
+from ai.services.ai_gateway import AIGateway
 from chat.models import ChatMessage, MessageDirection
 from chat.selectors import message_list_for_psid
 from chat.services.bot_state import ctx_cache_append, ctx_cache_get, ctx_cache_populate

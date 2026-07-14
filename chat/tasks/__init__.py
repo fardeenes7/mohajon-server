@@ -113,16 +113,15 @@ def process_inbound_message(
         return
 
     # AI engine turn
-    from chat.services.engine import process_turn
+    from chat.services.engine import run_ai_turn
     fallback = getattr(settings_obj, "messenger_fallback_message", None) if settings_obj else None
     ctx_size = getattr(settings_obj, "messenger_context_window_size", 20) if settings_obj else 20
 
-    reply = process_turn(
+    reply = run_ai_turn(
         shop_id=shop_id,
-        page_id=page_id,
-        psid=psid,
+        channel=page_id,  # Using page_id as channel for Meta
+        channel_identity=psid,
         inbound_text=message_text,
-        inbound_mid=mid,
         inbound_timestamp=timestamp,
         context_window_size=ctx_size,
         fallback_message=fallback,
