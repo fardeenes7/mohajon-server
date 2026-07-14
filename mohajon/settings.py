@@ -1,4 +1,5 @@
 import os
+# pyrefly: ignore [missing-import]
 import environ
 from pathlib import Path
 from datetime import timedelta
@@ -62,6 +63,8 @@ INSTALLED_APPS = [
 
     # Local
     'core',
+    'ai',
+    'chat',
     'users',
     'shops',
     'orders',
@@ -71,7 +74,6 @@ INSTALLED_APPS = [
     'marketing',
     'media.apps.MediaConfig',
     'catalog',
-    'messenger',
     'billing',
     'accounting',
     'analytics',
@@ -221,7 +223,9 @@ SPECTACULAR_SETTINGS = {
 }
 
 # Celery Configuration
-CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='amqp://mohajon:mohajon_password@localhost:5672//')
+# Broker: Redis db 1 (db 0 is the cache/result backend — kept separate to avoid key collisions).
+# Previously defaulted to amqp:// (RabbitMQ) — updated to match the broker migration.
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://localhost:6379/1')
 CELERY_RESULT_BACKEND = env('REDIS_URL', default='redis://localhost:6379/0')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -255,13 +259,21 @@ CELERY_BEAT_SCHEDULE = {
         'options': {'queue': 'default'},
     },
     'sweep-old-messenger-messages': {
-        'task': 'messenger.tasks.sweep_old_messages',
+        'task': 'chat.tasks.sweep_old_messages',
         'schedule': 60 * 60 * 24,  # Every 24 hours (30-day retention policy)
         'options': {'queue': 'default'},
     },
     'refresh-analytics-views-hourly': {
         'task': 'analytics.tasks.refresh_analytics_materialized_views',
         'schedule': 60 * 60,  # Every hour
+        'options': {'queue': 'default'},
+    },
+    # Custom domain DNS verification — runs the DNS readiness check for all shops
+    # with an unverified custom_domain. Effective no-op until custom domain flow is
+    # fully wired (Traefik IPs hardcoded in dns_health.py still need updating).
+    'validate-pending-custom-domains': {
+        'task': 'shops.tasks.domain_validation.validate_pending_custom_domains',
+        'schedule': 60 * 10,  # Every 10 minutes
         'options': {'queue': 'default'},
     },
 }

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from django.db.models import Max
 
-from messenger.models import MessengerMessage
+from chat.models import ChatMessage
 
 
 def message_list_for_psid(
@@ -24,7 +24,7 @@ def message_list_for_psid(
     Optionally filter to messages older than `before_timestamp` (Unix ms)
     for the AI's get_older_messages() tool.
     """
-    qs = MessengerMessage.objects.filter(
+    qs = ChatMessage.objects.filter(
         shop_id=shop_id,
         psid=psid,
         deleted_at__isnull=True,
@@ -50,7 +50,7 @@ def conversation_list_for_shop(*, shop_id: str, limit: int = 50) -> list[dict]:
     activity.  Used to populate the Omnichannel Inbox list view.
     """
     qs = (
-        MessengerMessage.objects
+        ChatMessage.objects
         .filter(shop_id=shop_id, deleted_at__isnull=True)
         .values("psid", "page_id")
         .annotate(last_ts=Max("timestamp"))

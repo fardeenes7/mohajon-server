@@ -256,8 +256,7 @@ class ProductViewSet(ViewSet):
         if not name:
             return Response({"detail": "Product name is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        from core.services.ai_gateway import AIGateway
-        gateway = AIGateway(shop_id)
+        from ai.services import generate_description
 
         specs_str = "\n".join([f"{k}: {v}" for k, v in specs.items()])
         prompt = (
@@ -268,12 +267,7 @@ class ProductViewSet(ViewSet):
         )
 
         try:
-            description = gateway.call_chat_completion(
-                messages=[
-                    {"role": "system", "content": "You are a world-class e-commerce copywriter. Always return content formatted in clean, minimal HTML."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
+            description = generate_description(shop_id=shop_id, prompt=prompt)
             return Response({"description": description})
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -290,14 +284,12 @@ class ProductViewSet(ViewSet):
         if not prompt:
             return Response({"detail": "Prompt is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        from core.services.ai_gateway import AIGateway
+        from ai.services import generate_image
         from media.services.ai_generate import save_ai_generated_image
         
-        gateway = AIGateway(shop_id)
-
         try:
             # 1. Generate via AI
-            image_url = gateway.call_image_generation(prompt=prompt)
+            image_url = generate_image(shop_id=shop_id, prompt=prompt)
             
             # 2. Persist to our storage
             media = save_ai_generated_image(

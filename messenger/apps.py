@@ -7,4 +7,4 @@ class MessengerConfig(AppConfig):
     verbose_name = "Messenger"
 
     def ready(self):
-        import messenger.signals  # noqa: F401
+        import chat.signals  # noqa: F401

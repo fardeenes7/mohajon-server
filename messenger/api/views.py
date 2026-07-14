@@ -2,16 +2,16 @@
 Messenger API views.
 
 Endpoints:
-  GET  /api/v1/messenger/webhook/         — Meta webhook verification (hub.challenge)
-  POST /api/v1/messenger/webhook/         — Meta webhook event ingestion
-  GET  /api/v1/messenger/inbox/           — Conversation list (Omnichannel Inbox)
-  GET  /api/v1/messenger/inbox/{psid}/    — Full message history for a PSID
-  POST /api/v1/messenger/takeover/        — Human takeover / handback
-  POST /api/v1/messenger/send/            — Agent outbound message
-  GET  /api/v1/messenger/faq/             — List FAQ entries for the shop
-  POST /api/v1/messenger/faq/             — Create FAQ entry
-  PUT  /api/v1/messenger/faq/{id}/        — Update FAQ entry
-  DELETE /api/v1/messenger/faq/{id}/      — Deactivate FAQ entry
+  GET  /api/v1/chat/webhook/         — Meta webhook verification (hub.challenge)
+  POST /api/v1/chat/webhook/         — Meta webhook event ingestion
+  GET  /api/v1/chat/inbox/           — Conversation list (Omnichannel Inbox)
+  GET  /api/v1/chat/inbox/{psid}/    — Full message history for a PSID
+  POST /api/v1/chat/takeover/        — Human takeover / handback
+  POST /api/v1/chat/send/            — Agent outbound message
+  GET  /api/v1/chat/faq/             — List FAQ entries for the shop
+  POST /api/v1/chat/faq/             — Create FAQ entry
+  PUT  /api/v1/chat/faq/{id}/        — Update FAQ entry
+  DELETE /api/v1/chat/faq/{id}/      — Deactivate FAQ entry
 """
 from __future__ import annotations
 
@@ -25,20 +25,20 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from messenger.api.serializers import (
+from chat.api.serializers import (
     AgentMessageSerializer,
     ConversationListSerializer,
     FAQEntrySerializer,
     HumanTakeoverSerializer,
 )
-from messenger.models import FAQEntry, MessengerMessage, MessageDirection
-from messenger.selectors import conversation_list_for_shop, message_list_for_psid
+from chat.models import FAQEntry, ChatMessage, MessageDirection
+from chat.selectors import conversation_list_for_shop, message_list_for_psid
 
 from webhooks.services import webhook_signature_valid
-from messenger.tasks import process_inbound_message, embed_faq_entry
+from chat.tasks import process_inbound_message, embed_faq_entry
 from marketing.models import SocialConnection
-from messenger.services.bot_state import bot_state_set_human_active, bot_state_clear_human_active
-from messenger.services.send_api import send_text
+from chat.services.bot_state import bot_state_set_human_active, bot_state_clear_human_active
+from chat.services.send_api import send_text
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +245,7 @@ class AgentSendView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         # Persist the agent-sent message
-        MessengerMessage.objects.create(
+        ChatMessage.objects.create(
             shop_id=shop_id,
             tenant_id=shop_id,
             psid=psid,

@@ -5,7 +5,7 @@ Responsibilities:
   1. Load the conversation context (Redis hot path → Postgres fallback).
   2. Build the system prompt with shop identity + policies.
   3. Run the OpenAI tool-call loop (max 5 function calls per turn) via AIGateway.
-  4. Persist the new messages to Redis cache + MessengerMessage table.
+  4. Persist the new messages to Redis cache + ChatMessage table.
   5. Delegate credit deduction + AIUsageLog audit to AIGateway.log_accumulated_usage().
   6. Handle OpenAI failures with retry → fallback message → DLQ alert.
 
@@ -26,10 +26,10 @@ from django.utils import timezone
 from core.models import AIModelUsage
 from core.services.ai_credits import has_sufficient_ai_credits
 from core.services.ai_gateway import AIGateway
-from messenger.models import MessengerMessage, MessageDirection
-from messenger.selectors import message_list_for_psid
-from messenger.services.bot_state import ctx_cache_append, ctx_cache_get, ctx_cache_populate
-from messenger.services.tools import TOOL_SCHEMAS, execute_tool
+from chat.models import ChatMessage, MessageDirection
+from chat.selectors import message_list_for_psid
+from chat.services.bot_state import ctx_cache_append, ctx_cache_get, ctx_cache_populate
+from chat.services.tools import TOOL_SCHEMAS, execute_tool
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ def _persist_message(
     timestamp: int,
     attachment_payload: dict | None = None,
 ) -> None:
-    MessengerMessage.objects.get_or_create(
+    ChatMessage.objects.get_or_create(
         mid=mid,
         defaults={
             "shop_id": shop_id,
@@ -245,7 +245,7 @@ def run_ai_turn(
 
 def _handle_credit_exhaustion(*, shop_id: str, page_id: str, psid: str) -> None:
     """Trigger human takeover + notify merchant on credit exhaustion."""
-    from messenger.services.bot_state import bot_state_set_human_active
+    from chat.services.bot_state import bot_state_set_human_active
     bot_state_set_human_active(page_id=page_id, psid=psid, ttl_minutes=30)
     logger.warning("AI credits exhausted for shop=%s — human takeover triggered", shop_id)
     # TODO: send merchant dashboard WS notification (v0.6 EPIC F)

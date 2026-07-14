@@ -1,0 +1,190 @@
+# ─── LOCAL DEVELOPMENT ────────────────────────────────────────────────────────
+# Usage: docker compose -f docker-compose.dev.yml up
+#
+# Requirements:
+#   - Copy server/.env.dev.example → server/.env and fill in values, OR
+#   - Let Docker Compose use the defaults defined below (suitable for first run).
+#
+# What's different from prod:
+#   - Source code bind-mounted for instant hot-reload (no rebuild needed on save)
+#   - Postgres and Redis ports exposed to host for local debugging
+#   - Direct Postgres connection (no PgBouncer — simpler, less noise in dev)
+#   - Django runserver (ASGI-capable, auto-reloads)
+#   - Single consolidated celery_worker (all non-AI queues) + celery_worker_ai
+#   - No resource limits (use what the dev machine has)
+#   - No restart policies (let crashes surface immediately)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+    # ── Database ─────────────────────────────────────────────────────────────
+    db:
+        image: pgvector/pgvector:pg16
+        platform: linux/amd64
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER:-mohajon_admin}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mohajon_dev_pass}
+            POSTGRES_DB: ${POSTGRES_DB:-mohajon}
+            # Passed to 01-create-accounts.sh init script which also enables pgvector
+            APP_DB_USER: ${APP_DB_USER:-mohajon}
+            APP_DB_PASSWORD: ${APP_DB_PASSWORD:-mohajon_app_pass}
+            # Dummy pgbouncer vars — still expected by init script, harmless in dev
+            PGBOUNCER_DB_USER: ${PGBOUNCER_DB_USER:-mohajon_bouncer}
+            PGBOUNCER_DB_PASSWORD: ${PGBOUNCER_DB_PASSWORD:-mohajon_bouncer_pass}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+            - ./docker/postgres/init:/docker-entrypoint-initdb.d
+        ports:
+            - "5433:5432" # Exposed for local psql / TablePlus / pgAdmin access
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "pg_isready -U $${POSTGRES_USER:-mohajon_admin} -d $${POSTGRES_DB:-mohajon}"
+                ]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+
+    # ── Cache / Broker / Channel layer ───────────────────────────────────────
+    redis:
+        image: redis:7-alpine
+        platform: linux/amd64
+        volumes:
+            - redis_data:/data
+        ports:
+            - "6380:6379" # Exposed for redis-cli / RedisInsight debugging
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+
+    # ── Django ASGI web server (hot-reload) ───────────────────────────────────
+    web:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: dev # ← dev stage: no non-root user, code is bind-mounted
+        platform: linux/amd64
+        command: python manage.py runserver 0.0.0.0:8000
+        volumes:
+            - .:/app # Hot-reload: source changes reflect instantly, no rebuild
+        ports:
+            - "8000:8000"
+        environment:
+            DEBUG: "True"
+            SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-not-for-production}
+            ALLOWED_HOSTS: "localhost,127.0.0.1,web"
+            # Direct Postgres connection in dev (no PgBouncer)
+            DATABASE_URL: ${DATABASE_URL:-postgres://mohajon:mohajon_app_pass@db:5432/mohajon}
+            # CONN_MAX_AGE is fine to be non-zero when talking directly to Postgres
+            CONN_MAX_AGE: "60"
+            REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+            CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+            AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+            AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+            AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-}
+            AWS_STORAGE_BUCKET_NAME: ${AWS_STORAGE_BUCKET_NAME:-mohajon-dev}
+            AWS_S3_REGION_NAME: ${AWS_S3_REGION_NAME:-auto}
+            CDN_BASE_URL: ${CDN_BASE_URL:-}
+            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+            META_APP_ID: ${META_APP_ID:-}
+            META_APP_SECRET: ${META_APP_SECRET:-}
+            META_OAUTH_REDIRECT_URI: ${META_OAUTH_REDIRECT_URI:-}
+            META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-dev-insecure-token}
+            GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+            GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+
+    # ── Celery worker — general queues ────────────────────────────────────────
+    # Handles: default, high_priority, media_processing
+    # Single consolidated worker saves ~1 GB RAM in dev vs. 3 separate containers.
+    celery_worker:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: dev
+        platform: linux/amd64
+        command: celery -A mohajon worker -l info -Q default,high_priority,media_processing --concurrency 2
+        volumes:
+            - .:/app
+        environment:
+            DEBUG: "True"
+            SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-not-for-production}
+            DATABASE_URL: ${DATABASE_URL:-postgres://mohajon:mohajon_app_pass@db:5432/mohajon}
+            CONN_MAX_AGE: "60"
+            REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+            CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+            AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+            AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+            AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-}
+            AWS_STORAGE_BUCKET_NAME: ${AWS_STORAGE_BUCKET_NAME:-mohajon-dev}
+            AWS_S3_REGION_NAME: ${AWS_S3_REGION_NAME:-auto}
+            CDN_BASE_URL: ${CDN_BASE_URL:-}
+            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+            META_APP_ID: ${META_APP_ID:-}
+            META_APP_SECRET: ${META_APP_SECRET:-}
+            META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-dev-insecure-token}
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+
+    # ── Celery worker — AI queues (I/O-bound) ─────────────────────────────────
+    # Handles: ai_rag, ai_copy, ai_image
+    # Uses thread pool — tasks spend most time waiting on OpenAI API calls,
+    # not CPU. Threads avoid the forking overhead of prefork for pure I/O work.
+    celery_worker_ai:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: dev
+        platform: linux/amd64
+        command: celery -A mohajon worker -l info -Q ai_rag,ai_copy,ai_image --concurrency 4 --pool threads
+        volumes:
+            - .:/app
+        environment:
+            DEBUG: "True"
+            SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-not-for-production}
+            DATABASE_URL: ${DATABASE_URL:-postgres://mohajon:mohajon_app_pass@db:5432/mohajon}
+            CONN_MAX_AGE: "60"
+            REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+            CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+
+    # ── Celery Beat ───────────────────────────────────────────────────────────
+    celery_beat:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: dev
+        platform: linux/amd64
+        command: celery -A mohajon beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+        volumes:
+            - .:/app
+        environment:
+            DEBUG: "True"
+            SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-not-for-production}
+            DATABASE_URL: ${DATABASE_URL:-postgres://mohajon:mohajon_app_pass@db:5432/mohajon}
+            CONN_MAX_AGE: "60"
+            REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+            CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+
+volumes:
+    postgres_data:
+    redis_data:

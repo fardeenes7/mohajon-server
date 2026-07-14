@@ -2,8 +2,8 @@ from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from messenger.models import FAQEntry
-from messenger.tasks.rag import embed_faq_entry
+from chat.models import FAQEntry
+from chat.tasks.rag import embed_faq_entry
 
 @receiver(post_save, sender=FAQEntry)
 def trigger_faq_rag_indexing(sender, instance, **kwargs):

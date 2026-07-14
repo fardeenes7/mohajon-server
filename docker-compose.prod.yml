@@ -1,14 +1,26 @@
 # ─── PRODUCTION ───────────────────────────────────────────────────────────────
 # Usage: docker compose -f docker-compose.prod.yml up -d
-# Requires a .env file at server/ root (see server/.env.example).
-# In Coolify: all env vars below map to Coolify Environment Variables.
+#
+# Deployment: Coolify, single VPS (~$20-25/month target).
+# Coolify handles reverse proxy (SSL termination, routing) — no nginx/caddy here.
+# All env vars are injected by Coolify's environment panel, not a checked-in file.
+#
+# Key differences from dev:
+#   - Source code baked into the image (Dockerfile prod target) — no bind mounts
+#   - PgBouncer in front of Postgres (transaction-mode connection pooling)
+#   - CONN_MAX_AGE must be "0" with PgBouncer transaction mode — persistent
+#     connections cause pool exhaustion and FATAL: connection errors
+#   - No host-exposed ports for db/redis/pgbouncer (internal network only)
+#   - restart: unless-stopped on all services
+#   - Memory limits sized for a budget 2-4 vCPU / 4-8 GB VPS
+#   - Two consolidated Celery workers (not six) — see MOHAJON.md for rationale
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
-    # ── Infrastructure ───────────────────────────────────────────────────────────
+    # ── Database ─────────────────────────────────────────────────────────────
     db:
         image: pgvector/pgvector:pg16-alpine
-        restart: always
+        restart: unless-stopped
         environment:
             POSTGRES_USER: ${POSTGRES_USER}
             POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -20,6 +32,7 @@ services:
         volumes:
             - postgres_data:/var/lib/postgresql/data
             - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+        # No ports exposed — internal network only
         healthcheck:
             test:
                 [
@@ -30,11 +43,18 @@ services:
             timeout: 5s
             retries: 6
             start_period: 30s
+        deploy:
+            resources:
+                limits:
+                    memory: 1g
 
+    # ── PgBouncer (connection pooler) ─────────────────────────────────────────
+    # Transaction-mode pool. CONN_MAX_AGE must be 0 in all Django services.
+    # Bitnami image manages its own config and userlist from env vars — no
+    # custom entrypoint or pgbouncer.ini needed.
     pgbouncer:
         image: public.ecr.aws/bitnami/pgbouncer:1.25.1-debian-12-r8
-        # No platform lock — supports both amd64 and arm64 hosts
-        restart: always
+        restart: unless-stopped
         environment:
             - PGBOUNCER_DATABASE=${PGBOUNCER_DB_NAME}
             - PGBOUNCER_PORT=5432
@@ -60,74 +80,51 @@ services:
             timeout: 5s
             retries: 6
             start_period: 20s
+        deploy:
+            resources:
+                limits:
+                    memory: 128m
 
+    # ── Redis (cache + Celery broker + result backend + channel layer) ─────────
     redis:
-        image: redis:7
-        platform: linux/amd64
-        restart: always
+        image: redis:7-alpine
+        restart: unless-stopped
         volumes:
             - redis_data:/data
+        # No ports exposed — internal network only
         healthcheck:
             test: ["CMD", "redis-cli", "ping"]
             interval: 10s
             timeout: 5s
             retries: 6
+        deploy:
+            resources:
+                limits:
+                    memory: 256m
 
-    rabbitmq:
-        # Use non-management image in prod — smaller footprint, no admin UI attack surface
-        image: rabbitmq:3
-        platform: linux/amd64
-        restart: always
-        environment:
-            RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
-            RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
-        volumes:
-            - rabbitmq_data:/var/lib/rabbitmq
-        healthcheck:
-            test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-            interval: 10s
-            timeout: 5s
-            retries: 6
-            start_period: 30s
-
-    meilisearch:
-        image: getmeili/meilisearch:v1.13
-        restart: always
-        command: ["--db-path", "/meili_data/data.ms", "--env", "production"]
-        environment:
-            MEILI_MASTER_KEY: ${MEILISEARCH_API_KEY}
-        volumes:
-            - meilisearch_data:/meili_data
-        healthcheck:
-            test:
-                ["CMD", "wget", "-q", "-O", "-", "http://localhost:7700/health"]
-            interval: 15s
-            timeout: 5s
-            retries: 6
-            start_period: 30s
-
-    # ── Django API (gunicorn) ────────────────────────────────────────────────────
-    api:
+    # ── Django ASGI web server ────────────────────────────────────────────────
+    # Gunicorn manages worker lifecycle (graceful restart, SIGTERM handling).
+    # UvicornWorker handles ASGI protocol — ready for Django Channels when wired.
+    web:
         build:
             context: .
             dockerfile: Dockerfile
-        restart: always
+            target: prod # ← prod stage: non-root user, source baked in
+        restart: unless-stopped
         ports:
-            - "8000:8000"
+            - "8001:8000" # Coolify reverse-proxy connects here
         environment:
             DEBUG: "False"
             SECRET_KEY: ${SECRET_KEY}
             ALLOWED_HOSTS: ${ALLOWED_HOSTS}
             CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}
             CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
-            # CONN_MAX_AGE MUST be 0 with PgBouncer transaction mode.
-            # Persistent connections cause pool exhaustion and FATAL errors.
+            WEB_URL: ${WEB_URL}
+            # Must be 0 with PgBouncer transaction mode
             CONN_MAX_AGE: "0"
             DATABASE_URL: ${DATABASE_URL}
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-            MEILISEARCH_HOST: ${MEILISEARCH_HOST}
-            MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY}
             AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
             AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
             AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL}
@@ -139,13 +136,11 @@ services:
             EMAIL_USE_TLS: ${EMAIL_USE_TLS}
             EMAIL_HOST_USER: ${EMAIL_HOST_USER}
             EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD}
-            # WEB_URL: used in email links, OAuth redirects, storefront URLs
-            WEB_URL: ${WEB_URL}
             SENTRY_DSN: ${SENTRY_DSN:-}
             META_APP_ID: ${META_APP_ID:-}
             META_APP_SECRET: ${META_APP_SECRET:-}
             META_OAUTH_REDIRECT_URI: ${META_OAUTH_REDIRECT_URI:-}
-            # Secures Meta webhook endpoint — must NOT be the default public string
+            # Required — secures the Meta webhook endpoint
             META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN}
             OPENAI_API_KEY: ${OPENAI_API_KEY:-}
             GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -155,71 +150,25 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
-            rabbitmq:
-                condition: service_healthy
-            meilisearch:
-                condition: service_healthy
+        deploy:
+            resources:
+                limits:
+                    memory: 1g
 
-    # ── Celery Workers ───────────────────────────────────────────────────────────
-    celery_worker_default:
+    # ── Celery worker — general queues ────────────────────────────────────────
+    # Handles: default, high_priority, media_processing
+    # Concurrency 4 — prefork processes, safe for mixed CPU/IO tasks.
+    celery_worker:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A mohajon worker -l info -Q default --concurrency 4
-        restart: always
+            target: prod
+        command: celery -A mohajon worker -l info -Q default,high_priority,media_processing --concurrency 4
+        restart: unless-stopped
         environment:
             DEBUG: "False"
             SECRET_KEY: ${SECRET_KEY}
-            DATABASE_URL: ${DATABASE_URL}
-            REDIS_URL: ${REDIS_URL}
-            CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-            MEILISEARCH_HOST: ${MEILISEARCH_HOST}
-            MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY}
-            SENTRY_DSN: ${SENTRY_DSN:-}
-        depends_on:
-            pgbouncer:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
-            rabbitmq:
-                condition: service_healthy
-            meilisearch:
-                condition: service_healthy
-
-    celery_worker_high:
-        build:
-            context: .
-            dockerfile: Dockerfile
-        command: celery -A mohajon worker -l info -Q high_priority --concurrency 2
-        restart: always
-        environment:
-            DEBUG: "False"
-            SECRET_KEY: ${SECRET_KEY}
-            DATABASE_URL: ${DATABASE_URL}
-            REDIS_URL: ${REDIS_URL}
-            CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-            MEILISEARCH_HOST: ${MEILISEARCH_HOST}
-            MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY}
-            SENTRY_DSN: ${SENTRY_DSN:-}
-        depends_on:
-            pgbouncer:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
-            rabbitmq:
-                condition: service_healthy
-            meilisearch:
-                condition: service_healthy
-
-    celery_worker_media:
-        build:
-            context: .
-            dockerfile: Dockerfile
-        command: celery -A mohajon worker -l info -Q media_processing --concurrency 2
-        restart: always
-        environment:
-            DEBUG: "False"
-            SECRET_KEY: ${SECRET_KEY}
+            CONN_MAX_AGE: "0"
             DATABASE_URL: ${DATABASE_URL}
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -228,49 +177,38 @@ services:
             AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL}
             AWS_STORAGE_BUCKET_NAME: ${AWS_STORAGE_BUCKET_NAME}
             AWS_S3_REGION_NAME: ${AWS_S3_REGION_NAME}
+            CDN_BASE_URL: ${CDN_BASE_URL}
+            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+            META_APP_ID: ${META_APP_ID:-}
+            META_APP_SECRET: ${META_APP_SECRET:-}
+            META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN}
             SENTRY_DSN: ${SENTRY_DSN:-}
         depends_on:
             pgbouncer:
                 condition: service_healthy
             redis:
                 condition: service_healthy
-            rabbitmq:
-                condition: service_healthy
+        deploy:
+            resources:
+                limits:
+                    memory: 768m
 
-    celery_worker_ai_rag:
+    # ── Celery worker — AI queues (I/O-bound) ─────────────────────────────────
+    # Handles: ai_rag, ai_copy, ai_image
+    # Thread pool: tasks wait on OpenAI API calls — threads avoid fork overhead
+    # and share the parent process memory (OpenAI client singleton, etc.).
+    # Concurrency 4 is safe since GIL doesn't hurt pure-I/O workloads.
+    celery_worker_ai:
         build:
             context: .
             dockerfile: Dockerfile
-        command: celery -A mohajon worker -l info -Q ai_rag --concurrency 2
-        restart: always
+            target: prod
+        command: celery -A mohajon worker -l info -Q ai_rag,ai_copy,ai_image --concurrency 4 --pool threads
+        restart: unless-stopped
         environment:
             DEBUG: "False"
             SECRET_KEY: ${SECRET_KEY}
-            DATABASE_URL: ${DATABASE_URL}
-            REDIS_URL: ${REDIS_URL}
-            CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-            OPENAI_API_KEY: ${OPENAI_API_KEY}
-            # Required for embed_faq_entry and embed_product_specs tasks
-            MEILISEARCH_HOST: ${MEILISEARCH_HOST}
-            MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY}
-            SENTRY_DSN: ${SENTRY_DSN:-}
-        depends_on:
-            pgbouncer:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
-            rabbitmq:
-                condition: service_healthy
-
-    celery_worker_ai_copy:
-        build:
-            context: .
-            dockerfile: Dockerfile
-        command: celery -A mohajon worker -l info -Q ai_copy --concurrency 2
-        restart: always
-        environment:
-            DEBUG: "False"
-            SECRET_KEY: ${SECRET_KEY}
+            CONN_MAX_AGE: "0"
             DATABASE_URL: ${DATABASE_URL}
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -281,40 +219,23 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
-            rabbitmq:
-                condition: service_healthy
+        deploy:
+            resources:
+                limits:
+                    memory: 1g
 
-    celery_worker_ai_image:
-        build:
-            context: .
-            dockerfile: Dockerfile
-        command: celery -A mohajon worker -l info -Q ai_image --concurrency 2
-        restart: always
-        environment:
-            DEBUG: "False"
-            SECRET_KEY: ${SECRET_KEY}
-            DATABASE_URL: ${DATABASE_URL}
-            REDIS_URL: ${REDIS_URL}
-            CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-            OPENAI_API_KEY: ${OPENAI_API_KEY}
-            SENTRY_DSN: ${SENTRY_DSN:-}
-        depends_on:
-            pgbouncer:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
-            rabbitmq:
-                condition: service_healthy
-
+    # ── Celery Beat ───────────────────────────────────────────────────────────
     celery_beat:
         build:
             context: .
             dockerfile: Dockerfile
+            target: prod
         command: celery -A mohajon beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
-        restart: always
+        restart: unless-stopped
         environment:
             DEBUG: "False"
             SECRET_KEY: ${SECRET_KEY}
+            CONN_MAX_AGE: "0"
             DATABASE_URL: ${DATABASE_URL}
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -324,11 +245,11 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
-            rabbitmq:
-                condition: service_healthy
+        deploy:
+            resources:
+                limits:
+                    memory: 256m
 
 volumes:
     postgres_data:
     redis_data:
-    rabbitmq_data:
-    meilisearch_data:

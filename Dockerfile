@@ -1,4 +1,7 @@
-# ─── Stage 1: dependencies ────────────────────────────────────────────────────
+# ─── Stage 1: dependency builder ──────────────────────────────────────────────
+# Builds the full Python environment. Output is copied into dev/prod stages.
+# Kept separate so the heavy build tools (gcc, libpq-dev) never land in the
+# final runtime image.
 FROM python:3.12-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -6,10 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install poetry into an isolated location
 ENV POETRY_VERSION=2.1.3 \
     POETRY_HOME=/opt/poetry \
-    POETRY_VENV=/opt/poetry-venv \
     POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_CREATE=false \
     PIP_NO_CACHE_DIR=1
@@ -22,30 +23,66 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install --no-interaction --no-ansi --no-root --only main
 
 
-# ─── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM python:3.12-slim AS runner
+# ─── Stage 2: dev ─────────────────────────────────────────────────────────────
+# Lightweight image for local development.
+#   - Source code is bind-mounted at runtime (docker-compose.dev.yml).
+#   - Runs as root so volume mounts don't cause permission issues on Linux hosts.
+#   - Uses Django's built-in ASGI-capable dev server (auto-reloads on save).
+#   - No collectstatic (DEBUG=True serves static files directly).
+FROM python:3.12-slim AS dev
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user for security
-RUN groupadd --system django && useradd --system --gid django --create-home django
-
-# Copy installed packages from builder stage
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 WORKDIR /app
 
-# Copy project source
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8000
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+
+
+# ─── Stage 3: prod ────────────────────────────────────────────────────────────
+# Hardened production image.
+#   - Non-root user (django) for security.
+#   - Source code baked in — no bind mounts.
+#   - ASGI server: Gunicorn + UvicornWorker.
+#       Chosen over bare Uvicorn for Gunicorn's process management (graceful
+#       restarts, worker recycling, SIGTERM handling) while still using Uvicorn's
+#       ASGI protocol implementation. Chosen over Daphne because Uvicorn is more
+#       actively maintained and Django Channels 4.x fully supports it.
+#       When Django Channels is wired up (real-time features), no changes needed
+#       here — uvicorn.workers.UvicornWorker already speaks ASGI natively.
+FROM python:3.12-slim AS prod
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user
+RUN groupadd --system django && useradd --system --gid django --create-home django
+
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+WORKDIR /app
+
+# Bake in source — no bind mounts in prod
 COPY --chown=django:django . .
 
-# Create directories for static/media that the app needs
-RUN mkdir -p /app/staticfiles /app/mediafiles && chown -R django:django /app/staticfiles /app/mediafiles
+# Pre-create writable directories the app needs
+RUN mkdir -p /app/staticfiles /app/mediafiles \
+    && chown -R django:django /app/staticfiles /app/mediafiles
 
-# Copy and configure entrypoint
 COPY --chown=django:django docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -54,10 +91,14 @@ USER django
 EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["gunicorn", "mohajon.wsgi:application", \
-    "--bind", "0.0.0.0:8000", \
-    "--workers", "4", \
-    "--threads", "2", \
-    "--timeout", "120", \
-    "--access-logfile", "-", \
-    "--error-logfile", "-"]
+# Gunicorn manages worker lifecycle; UvicornWorker handles ASGI protocol.
+# 4 workers is a safe default for a single-CPU VPS (2×CPU+1 rule of thumb).
+# Tune via GUNICORN_WORKERS env override if needed in Coolify.
+CMD ["gunicorn", "mohajon.asgi:application", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--bind", "0.0.0.0:8000", \
+     "--workers", "4", \
+     "--timeout", "120", \
+     "--graceful-timeout", "30", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-"]

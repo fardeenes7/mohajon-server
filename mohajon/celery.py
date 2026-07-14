@@ -29,10 +29,10 @@ app.conf.task_default_exchange = 'default'
 app.conf.task_default_routing_key = 'default'
 
 app.conf.task_routes = {
-    'messenger.tasks.embed_faq_entry': {'queue': 'ai_rag', 'routing_key': 'ai_rag'},
-    'core.tasks.generate_product_copy': {'queue': 'ai_copy', 'routing_key': 'ai_copy'},
-    'core.tasks.generate_ad_copy': {'queue': 'ai_copy', 'routing_key': 'ai_copy'},
-    'core.tasks.generate_ad_image': {'queue': 'ai_image', 'routing_key': 'ai_image'},
+    'chat.tasks.embed_faq_entry': {'queue': 'ai_rag', 'routing_key': 'ai_rag'},
+    'ai.tasks.generate_product_copy': {'queue': 'ai_copy', 'routing_key': 'ai_copy'},
+    'ai.tasks.generate_ad_copy': {'queue': 'ai_copy', 'routing_key': 'ai_copy'},
+    'ai.tasks.generate_ad_image': {'queue': 'ai_image', 'routing_key': 'ai_image'},
 }
 
 # Load task modules from all registered Django apps.

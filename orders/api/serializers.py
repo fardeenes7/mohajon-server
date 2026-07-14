@@ -67,7 +67,7 @@ class PaymentInvoiceCodConfirmResponseSerializer(serializers.Serializer):
 class CustomerShortSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerProfile
-        fields = ["id", "full_name", "phone_number", "email"]
+        fields = ["id", "name", "phone_number"]
 
 
 class OrderListSerializer(serializers.ModelSerializer):
@@ -78,7 +78,6 @@ class OrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             "id",
-            "short_id",
             "status",
             "total_amount",
             "currency",
@@ -97,19 +96,15 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             "id",
-            "short_id",
             "status",
             "total_amount",
             "subtotal_amount",
             "shipping_amount",
             "discount_amount",
-            "tax_amount",
             "currency",
             "customer",
             "shipping_address",
             "billing_address",
-            "customer_note",
-            "admin_note",
             "items",
             "created_at",
             "updated_at",

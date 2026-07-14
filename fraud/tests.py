@@ -16,14 +16,15 @@ class FraudScoringTests(TestCase):
 		self.phone_identity = PhoneIdentity.objects.create(user=self.actor, phone_number="+8801710000000")
 
 	def _create_order(self, **kwargs):
+		is_verified = kwargs.pop("is_verified", False)
 		return Order.objects.create(
 			shop=self.shop,
 			tenant_id=self.shop.id,
 			user=self.actor,
 			phone_identity=self.phone_identity,
 			status=OrderStatus.CONFIRMED,
-			confidence_level=OrderConfidenceLevel.LOW,
-			is_verified=False,
+			confidence_level=kwargs.pop("confidence_level", OrderConfidenceLevel.LOW),
+			is_verified=is_verified,
 			actor_reference="127.0.0.1",
 			**kwargs,
 		)

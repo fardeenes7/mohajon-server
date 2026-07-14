@@ -67,7 +67,7 @@ def trigger_product_rag_indexing(sender, instance, **kwargs):
     """
     EPIC A-03: Enqueue an async task to generate semantic embeddings for RAG.
     """
-    from messenger.tasks.rag import embed_product_specs
+    from chat.tasks.rag import embed_product_specs
 
     product_id = str(instance.pk)
 

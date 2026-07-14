@@ -16,7 +16,7 @@ def update_traefik_dynamic_config(shop_subdomain: str, custom_domain: str):
     try:
         # Example Redis-based Traefik config update
         # Key structure: traefik/http/routers/{shop_subdomain}-custom/rule
-        redis_client = redis.Redis.from_url(settings.CELERY_BROKER_URL)
+        redis_client = redis.Redis.from_url(settings.REDIS_URL)
         
         router_key = f"traefik/http/routers/{shop_subdomain}-custom"
         

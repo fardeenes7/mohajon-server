@@ -2,6 +2,7 @@ from rest_framework import generics, status, serializers
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from shops.models import Shop, SubscriptionPlan, ShopMember
+from billing.models import ShopSubscription
 from affiliates.models import Referral
 from django.db import transaction
 from django.conf import settings
@@ -63,7 +64,18 @@ class ShopCreateView(generics.CreateAPIView):
                 role='OWNER'
             )
 
-            # 6. Track Referral
+            # 6. Bootstrap billing — create ShopSubscription row eagerly so that
+            #    get_subscription_context() never hits a missing-row edge case.
+            #    get_or_create_subscription() would lazily create this, but doing it
+            #    here keeps all shop-creation side-effects in one atomic block.
+            ShopSubscription.objects.create(
+                shop=shop,
+                tenant_id=shop.id,
+                tier=ShopSubscription.TIER_FREE,
+                status=ShopSubscription.STATUS_ACTIVE,
+            )
+
+            # 7. Track Referral
             if referrer_shop:
                 Referral.objects.create(
                     referrer_shop=referrer_shop,
@@ -76,3 +88,4 @@ class ShopCreateView(generics.CreateAPIView):
             'subdomain': subdomain,
             'shop_id': str(shop.id)
         }, status=status.HTTP_201_CREATED)
+
