@@ -1,7 +1,5 @@
-# Generated manually
-
+import django.contrib.postgres.operations
 from django.db import migrations
-from pgvector.django import VectorExtension
 
 class Migration(migrations.Migration):
 
@@ -11,5 +9,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        VectorExtension(),
+        django.contrib.postgres.operations.CreateExtension('vector'),
     ]
