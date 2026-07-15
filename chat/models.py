@@ -115,3 +115,23 @@ class FAQEntry(TenantModel):
 
     def __str__(self) -> str:
         return f"[{self.category}] {self.question[:80]}"
+
+
+class WhatsAppConfig(TenantModel):
+    """
+    Configuration and credentials for the WhatsApp Business API.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shop = models.OneToOneField(
+        "shops.Shop",
+        on_delete=models.CASCADE,
+        related_name="whatsapp_config",
+    )
+    phone_number_id = models.CharField(max_length=255, db_index=True)
+    waba_id = models.CharField(max_length=255)
+    access_token = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    def __str__(self) -> str:
+        return f"WhatsApp Config: {self.shop.name}"
+

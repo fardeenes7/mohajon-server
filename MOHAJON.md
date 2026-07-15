@@ -102,3 +102,10 @@ The platform architecture splits AI generation and Chat mechanics into two disti
 - Previous prompt sessions incorrectly referenced "57 tests in catalog" and "46 tests post-refactor". 
 - Full `git log` and `git diff-filter=D` audits confirmed these numbers never existed in the repository. They were an AI hallucination. The catalog app had exactly 11 tests upon initial creation.
 - The true baseline as of this audit is exactly 80 tests. No tests were silently dropped by the Django test runner during discovery.
+
+### Chat Channel Adapter Pattern
+The `chat` app uses a unified `BaseChannelAdapter` interface (`chat/channels/base.py`) to standardize omnichannel communication.
+- **Adapters** encapsulate all channel-specific logic (e.g. `FacebookAdapter`, `WhatsAppAdapter`, `WebWidgetAdapter`).
+- **Registry** (`chat/channels/registry.py`) maps `ChannelChoices` to the correct adapter instance.
+- **Webhook Dispatch**: A single endpoint (`/api/v1/chat/webhooks/<channel_id>/`) handles inbound traffic for all channels dynamically.
+- **Credential Ownership**: Adapters are responsible for fetching their own credentials (e.g., Facebook uses `SocialConnection`, while future channels will use dedicated models in the `chat` app).

@@ -126,24 +126,6 @@ urllib3 = {version = ">=1.25.4,<2.2.0 || >2.2.0,<3", markers = "python_version >
 crt = ["awscrt (==0.31.2)"]
 
 [[package]]
-name = "camel-converter"
-version = "5.1.0"
-description = "Converts a string from snake case to camel case or camel case to snake case"
-optional = false
-python-versions = ">=3.10"
-groups = ["main"]
-files = [
-    {file = "camel_converter-5.1.0-py3-none-any.whl", hash = "sha256:93f05d7d84a4353ddfd87bca909d1de45c11f5757f6a460de10534397146fe88"},
-    {file = "camel_converter-5.1.0.tar.gz", hash = "sha256:d979f23de232aa262dcf15a263ed9af934ff4378644dae23a7c2f8d40f4fff8f"},
-]
-
-[package.dependencies]
-pydantic = {version = ">=2.0.0", optional = true, markers = "extra == \"pydantic\""}
-
-[package.extras]
-pydantic = ["pydantic (>=2.0.0)"]
-
-[[package]]
 name = "celery"
 version = "5.6.3"
 description = "Distributed Task Queue."
@@ -1299,22 +1281,6 @@ sqlalchemy = ["sqlalchemy (>=1.4.48,<2.1)"]
 sqs = ["boto3 (>=1.26.143)", "pycurl (>=7.43.0.5) ; sys_platform != \"win32\" and platform_python_implementation == \"CPython\"", "urllib3 (>=1.26.16)"]
 yaml = ["PyYAML (>=3.10)"]
 zookeeper = ["kazoo (>=2.8.0)"]
-
-[[package]]
-name = "meilisearch"
-version = "0.40.0"
-description = "The python client for Meilisearch API."
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-files = [
-    {file = "meilisearch-0.40.0-py3-none-any.whl", hash = "sha256:ae7378e448f01116f4fcbd0029f5383a2b17ed971ba2241c631408c45c86ce9d"},
-    {file = "meilisearch-0.40.0.tar.gz", hash = "sha256:4348ea6e4bacb4b1391b9b577956a03090ff9327d6ebcddcf479f39b2d4b5b05"},
-]
-
-[package.dependencies]
-camel-converter = {version = "*", extras = ["pydantic"]}
-requests = "*"
 
 [[package]]
 name = "numpy"
@@ -3002,4 +2968,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "d5b97161f29844ef971a8ac877709f8e547ac0465855afc7bf9f38980931e0c7"
+content-hash = "69748dd57622456237c899190b99c2ee9a442a6902791fa31c57fd777396177b"

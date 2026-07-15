@@ -207,13 +207,28 @@ def execute_tool(
 # ---------------------------------------------------------------------------
 
 def _search_products(*, shop_id: str, query: str, limit: int = 5) -> dict:
-    import meilisearch
-    from django.conf import settings
+    from catalog.models import Product
+    from django.contrib.postgres.search import SearchQuery, SearchRank
 
-    client = meilisearch.Client(settings.MEILISEARCH_HOST, settings.MEILISEARCH_API_KEY)
-    index = client.index(f"products_{shop_id}")
-    results = index.search(query, {"limit": limit, "filter": f"shop_id = '{shop_id}' AND status = 'PUBLISHED'"})
-    return {"products": results.get("hits", [])}
+    fts_query = SearchQuery(query, config="english")
+    qs = (
+        Product.objects.filter(shop_id=shop_id, status="PUBLISHED", deleted_at__isnull=True)
+        .annotate(rank=SearchRank("search_vector", fts_query))
+        .filter(search_vector=fts_query)
+        .order_by("-rank")[:limit]
+    )
+
+    results = []
+    for p in qs:
+        results.append({
+            "id": str(p.id),
+            "name": p.name,
+            "base_price": str(p.base_price),
+            "description": p.description[:100] + "..." if p.description else "",
+            "status": p.status,
+            "total_stock": p.total_stock,
+        })
+    return {"products": results}
 
 
 def _get_product_details(*, shop_id: str, product_id: str) -> dict:

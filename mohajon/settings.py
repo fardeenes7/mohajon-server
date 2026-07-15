@@ -352,12 +352,7 @@ SUBDOMAIN_BLACKLIST = {
     'support', 'dashboard', 'mohajon', 'checkout', 'pay', 'billing', 'docs'
 }
 
-# ── Meilisearch (Fix 6.8 — replaces Postgres FTS from v0.3) ─────────────────
-# Primary catalog search engine. Supports Bengali phonetic (Banglish)
-# typo-tolerance and faceted filtering.
-# CatalogIndexingTask syncs Product records on create/update/delete via post_save.
-MEILISEARCH_HOST = env('MEILISEARCH_HOST', default='http://localhost:7700')
-MEILISEARCH_API_KEY = env('MEILISEARCH_API_KEY', default='mohajon_meili_master_key')
+
 
 # ── Meta OAuth (v0.4 social connect) ───────────────────────────────────────
 META_APP_ID = env('META_APP_ID', default='')

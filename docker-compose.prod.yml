@@ -137,6 +137,7 @@ services:
             EMAIL_HOST_USER: ${EMAIL_HOST_USER}
             EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD}
             SENTRY_DSN: ${SENTRY_DSN:-}
+            SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
             META_APP_ID: ${META_APP_ID:-}
             META_APP_SECRET: ${META_APP_SECRET:-}
             META_OAUTH_REDIRECT_URI: ${META_OAUTH_REDIRECT_URI:-}
@@ -183,6 +184,7 @@ services:
             META_APP_SECRET: ${META_APP_SECRET:-}
             META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN}
             SENTRY_DSN: ${SENTRY_DSN:-}
+            SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
         depends_on:
             pgbouncer:
                 condition: service_healthy
@@ -214,6 +216,7 @@ services:
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
             OPENAI_API_KEY: ${OPENAI_API_KEY}
             SENTRY_DSN: ${SENTRY_DSN:-}
+            SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
         depends_on:
             pgbouncer:
                 condition: service_healthy
@@ -240,6 +243,7 @@ services:
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
             SENTRY_DSN: ${SENTRY_DSN:-}
+            SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
         depends_on:
             pgbouncer:
                 condition: service_healthy

@@ -31,7 +31,6 @@ dependencies = [
     "pillow (>=11.2.1,<12.0.0)",
     "django-filter (>=25.1,<26.0)",
     "django-celery-beat (>=2.7.0,<3.0.0)",
-    "meilisearch (>=0.31.0,<1.0.0)",
     "gunicorn (>=23.0.0,<24.0.0)",
     "openai (>=1.78.0,<2.0.0)",
     "pgvector (>=0.3.0,<0.4.0)",

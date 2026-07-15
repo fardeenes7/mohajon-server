@@ -1,66 +1,43 @@
-from __future__ import annotations
-
 import logging
-import time
+from typing import Any
 
 from django.conf import settings
-from django.http import HttpResponse
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework.views import APIView
+from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 
-from marketing.models import SocialConnection
+from chat.channels.base import BaseChannelAdapter
 from webhooks.services import webhook_signature_valid
-from chat.tasks import process_inbound_message
-from chat.channels.api import send_text # Need to implement or move
+from marketing.models import SocialConnection
+from chat.channels.send_api import send_text
 
 logger = logging.getLogger(__name__)
 
-def _get_shop_id(request) -> str:
-    shop_id = getattr(request, "tenant_id", None)
-    if not shop_id:
-        raise ValueError("Missing X-Tenant-ID header.")
-    return shop_id
-
-def _get_page_token(shop_id: str, page_id: str) -> str | None:
-    try:
-        conn = SocialConnection.objects.get(
-            shop_id=shop_id,
-            page_id=page_id,
-            deleted_at__isnull=True,
-        )
-        return conn.access_token
-    except Exception:
-        return None
-
-class FacebookWebhookView(APIView):
-    authentication_classes = []
-    permission_classes = []
-
-    def get(self, request):
+class FacebookAdapter(BaseChannelAdapter):
+    
+    def handle_webhook_handshake(self, request: HttpRequest) -> HttpResponse:
         mode = request.query_params.get("hub.mode")
         token = request.query_params.get("hub.verify_token")
         challenge = request.query_params.get("hub.challenge")
 
         if mode == "subscribe" and token == settings.META_WEBHOOK_VERIFY_TOKEN:
             return HttpResponse(challenge, content_type="text/plain")
-        return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        
+        return HttpResponseForbidden("Forbidden")
 
-    def post(self, request):
+    def verify_webhook_signature(self, request: HttpRequest) -> bool:
         signature = request.headers.get("X-Hub-Signature-256", "")
         body = request.body
+        return webhook_signature_valid(signature=signature, body=body)
 
-        if not webhook_signature_valid(signature=signature, body=body):
-            logger.warning("Meta webhook: invalid HMAC signature.")
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-
+    def parse_webhook_payload(self, request: HttpRequest) -> list[dict[str, Any]]:
         data = request.data
+        events = []
+        
         if data.get("object") != "page":
-            return Response({"status": "ignored"})
+            return events
 
         for entry in data.get("entry", []):
             page_id = str(entry.get("id", ""))
+
             try:
                 conn = SocialConnection.objects.get(page_id=page_id, deleted_at__isnull=True)
                 shop_id = str(conn.shop_id)
@@ -77,29 +54,82 @@ class FacebookWebhookView(APIView):
                     msg = event["message"]
                     mid = msg.get("mid", f"unk_{ts}")
                     text = msg.get("text")
-                    process_facebook_message.delay(
-                        shop_id=shop_id,
-                        page_id=page_id,
-                        psid=psid,
-                        message_text=text,
-                        mid=mid,
-                        timestamp=ts,
-                        messaging_type="message",
-                        page_access_token=page_access_token,
-                    )
+                    events.append({
+                        "shop_id": shop_id,
+                        "page_id": page_id,
+                        "psid": psid,
+                        "message_text": text,
+                        "mid": mid,
+                        "timestamp": ts,
+                        "messaging_type": "message",
+                        "page_access_token": page_access_token,
+                    })
                 elif "postback" in event:
                     payload = event["postback"].get("payload", "")
-                    process_facebook_message.delay(
-                        shop_id=shop_id,
-                        page_id=page_id,
-                        psid=psid,
-                        message_text=None,
-                        mid=f"postback_{ts}",
-                        timestamp=ts,
-                        messaging_type="postback",
-                        postback_payload=payload,
-                        page_access_token=page_access_token,
-                    )
+                    events.append({
+                        "shop_id": shop_id,
+                        "page_id": page_id,
+                        "psid": psid,
+                        "message_text": None,
+                        "mid": f"postback_{ts}",
+                        "timestamp": ts,
+                        "messaging_type": "postback",
+                        "postback_payload": payload,
+                        "page_access_token": page_access_token,
+                    })
 
-            # Comments handling omitted for brevity but follows same pattern
-        return Response({"status": "ok"})
+            for change in entry.get("changes", []):
+                if change.get("field") == "feed":
+                    val = change.get("value", {})
+                    if val.get("item") == "comment" and val.get("verb") == "add":
+                        comment_id = val.get("comment_id", "")
+                        post_id = val.get("post_id", "")
+                        from_data = val.get("from", {})
+                        commenter_psid = from_data.get("id", "")
+                        events.append({
+                            "shop_id": shop_id,
+                            "page_id": page_id,
+                            "psid": commenter_psid,
+                            "message_text": val.get("message"),
+                            "mid": f"comment_{comment_id}",
+                            "timestamp": int(val.get("created_time", 0)),
+                            "messaging_type": "comment",
+                            "comment_data": {
+                                "comment_id": comment_id,
+                                "post_id": post_id,
+                                "product_ids": [],
+                            },
+                            "page_access_token": page_access_token,
+                        })
+        return events
+
+    def send_text(self, shop_id: str, channel_identity: str, text: str, **kwargs: Any) -> None:
+        page_id = kwargs.get("page_id")
+        
+        if not page_id:
+            # Fallback if AgentSendView didn't provide it
+            from chat.models import Conversation
+            try:
+                conversation = Conversation.objects.get(
+                    shop_id=shop_id,
+                    channel="FACEBOOK",
+                    channel_identity=channel_identity
+                )
+                page_id = conversation.metadata.get("page_id")
+            except Exception:
+                pass
+                
+        if not page_id:
+            raise ValueError(f"Could not resolve page_id for FACEBOOK {channel_identity}")
+
+        try:
+            conn = SocialConnection.objects.get(
+                shop_id=shop_id,
+                page_id=page_id,
+                deleted_at__isnull=True,
+            )
+            token = conn.access_token
+        except Exception as e:
+            raise ValueError(f"Could not resolve credentials for FACEBOOK {channel_identity}: {e}")
+
+        send_text(psid=channel_identity, text=text, token=token)

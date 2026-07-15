@@ -74,7 +74,10 @@ services:
         environment:
             DEBUG: "True"
             SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-not-for-production}
-            ALLOWED_HOSTS: "localhost,127.0.0.1,web"
+            ALLOWED_HOSTS: "*"
+            WEB_URL: ${WEB_URL:-http://localhost:3000}
+            CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+            CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
             # Direct Postgres connection in dev (no PgBouncer)
             DATABASE_URL: ${DATABASE_URL:-postgres://mohajon:mohajon_app_pass@db:5432/mohajon}
             # CONN_MAX_AGE is fine to be non-zero when talking directly to Postgres
@@ -94,6 +97,13 @@ services:
             META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-dev-insecure-token}
             GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
             GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+            EMAIL_HOST: ${EMAIL_HOST:-smtp.mailtrap.io}
+            EMAIL_PORT: ${EMAIL_PORT:-2525}
+            EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
+            EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+            EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+            SENTRY_DSN: ${SENTRY_DSN:-}
+            SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
         depends_on:
             db:
                 condition: service_healthy
@@ -129,6 +139,13 @@ services:
             META_APP_ID: ${META_APP_ID:-}
             META_APP_SECRET: ${META_APP_SECRET:-}
             META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-dev-insecure-token}
+            EMAIL_HOST: ${EMAIL_HOST:-smtp.mailtrap.io}
+            EMAIL_PORT: ${EMAIL_PORT:-2525}
+            EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
+            EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+            EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+            SENTRY_DSN: ${SENTRY_DSN:-}
+            SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
         depends_on:
             db:
                 condition: service_healthy
@@ -156,6 +173,8 @@ services:
             REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
             OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+            SENTRY_DSN: ${SENTRY_DSN:-}
+            SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
         depends_on:
             db:
                 condition: service_healthy
@@ -179,6 +198,8 @@ services:
             CONN_MAX_AGE: "60"
             REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+            SENTRY_DSN: ${SENTRY_DSN:-}
+            SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
         depends_on:
             db:
                 condition: service_healthy

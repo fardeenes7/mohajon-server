@@ -6,9 +6,7 @@ prefetch_related to avoid N+1 problems.
 
 Search architecture (Fix 6.8 — post_v03_debrief.md):
   - Dashboard product list: Postgres FTS (status/category/shop filters; no typo tolerance needed)
-  - Storefront search: Meilisearch (typo tolerance, Banglish phonetic matching)
-  - Fallback: if Meilisearch is unavailable, storefront search falls back to Postgres FTS
-    with a logged warning.
+  - Storefront search: Postgres FTS
 """
 import logging
 
@@ -41,9 +39,7 @@ def product_list_for_dashboard(
     Returns a queryset of Products for the seller dashboard.
     Supports status filter, category filter, and full-text search via Postgres FTS.
 
-    Note: Dashboard search uses Postgres FTS — typo tolerance is not required here
-    since sellers know their own product names. Meilisearch is used for storefront
-    (customer-facing) search only.
+    Note: Dashboard search uses Postgres FTS.
     """
     from catalog.models import Product
 
@@ -91,10 +87,7 @@ def product_list_for_storefront(
     Returns only PUBLISHED products for the public storefront.
     Orders by manual sort_order (drag-drop configured by merchant).
 
-    Fix 6.8: When `search` is provided, queries Meilisearch for typo-tolerant
-    (Banglish-aware) results, then fetches matching IDs from Postgres to preserve
-    the full ORM queryset interface (with prefetch_related etc.). Falls back to
-    Postgres FTS if Meilisearch is unavailable.
+    Fix 6.8: Uses Postgres FTS for storefront search.
     """
     from catalog.models import Product
 
@@ -116,60 +109,17 @@ def product_list_for_storefront(
         base_qs = base_qs.filter(category__slug=category_slug)
 
     if search:
-        meili_ids = _search_via_meilisearch(shop_id=shop_id, query=search)
-        if meili_ids is not None:
-            # Preserve Meilisearch relevance ordering via a CASE WHEN expression
-            from django.db.models import Case, IntegerField, Value, When
-            order_cases = [
-                When(id=product_id, then=Value(rank))
-                for rank, product_id in enumerate(meili_ids)
-            ]
-            if order_cases:
-                base_qs = base_qs.filter(id__in=meili_ids).annotate(
-                    meili_rank=Case(*order_cases, default=Value(9999), output_field=IntegerField())
-                ).order_by("meili_rank")
-            else:
-                # No results from Meilisearch
-                return base_qs.none()
-        else:
-            # Meilisearch unavailable — fall back to Postgres FTS
-            fts_query = SearchQuery(search, config="english")
-            base_qs = (
-                base_qs.annotate(rank=SearchRank("search_vector", fts_query))
-                .filter(search_vector=fts_query)
-                .order_by("-rank")
-            )
+        fts_query = SearchQuery(search, config="english")
+        base_qs = (
+            base_qs.annotate(rank=SearchRank("search_vector", fts_query))
+            .filter(search_vector=fts_query)
+            .order_by("-rank")
+        )
 
     return base_qs
 
 
-def _search_via_meilisearch(*, shop_id: str, query: str) -> list[str] | None:
-    """
-    Executes a Meilisearch query scoped to a single shop.
-    Returns a list of product ID strings in relevance order, or None if Meilisearch
-    is unavailable (so the caller can fall back to Postgres FTS).
 
-    Tenant isolation is enforced by the `filter: "shop_id = {shop_id}"` clause.
-    """
-    try:
-        from catalog.services.search import get_or_create_index
-
-        index = get_or_create_index()
-        result = index.search(
-            query,
-            {
-                "filter": f"shop_id = {shop_id}",
-                "attributesToRetrieve": ["id"],
-                "limit": 200,  # More than a typical page; Postgres handles pagination
-            },
-        )
-        return [hit["id"] for hit in result.get("hits", [])]
-    except Exception as exc:
-        logger.warning(
-            "_search_via_meilisearch: Meilisearch unavailable, falling back to Postgres FTS. Error: %s",
-            exc,
-        )
-        return None
 
 
 def product_get_for_storefront(*, shop_id: str, slug: str) -> "Product":  # noqa: F821

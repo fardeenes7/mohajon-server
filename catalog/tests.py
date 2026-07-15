@@ -109,10 +109,7 @@ class TestFTSFallback(CatalogBaseTestCase):
         qs = Product.objects.filter(search_vector="apple")
         self.assertTrue(qs.filter(id=prod.id).exists())
 
-    @patch("catalog.selectors.product._search_via_meilisearch")
-    def test_storefront_search_fallback(self, mock_meili):
-        # mock meili failure
-        mock_meili.return_value = None
+    def test_storefront_search_fts(self):
         
         # We need a product to search
         prod = Product.objects.create(

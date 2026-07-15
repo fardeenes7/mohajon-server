@@ -4,7 +4,6 @@ Catalog signals.
 1. Auto-create ShopTrackingConfig when a new Shop is created.
 2. Update Product.search_vector when name/description changes (Postgres FTS fallback).
 3. Enqueue CatalogIndexingTask to sync Product to Meilisearch on create/update/delete.
-   Fix 6.8 (post_v03_debrief.md).
 """
 from django.contrib.postgres.search import SearchVector
 from django.db import models, transaction
@@ -28,8 +27,7 @@ def update_product_search_vector(sender, instance, **kwargs):
 
     NOTE: This is kept as a legacy signal for dashboard keyword search fallback
     (product_list_for_dashboard still queries Postgres directly for status/category
-    filters). Meilisearch handles storefront typo-tolerant search via the separate
-    meilisearch_index_product signal below.
+    filters).
     """
     from catalog.models.product import Product
 
@@ -41,25 +39,6 @@ def update_product_search_vector(sender, instance, **kwargs):
         )
     )
 
-
-@receiver(post_save, sender="catalog.Product")
-def meilisearch_index_product(sender, instance, **kwargs):
-    """
-    Fix 6.8: Enqueue an async Celery task to sync this Product to Meilisearch.
-
-    Uses transaction.on_commit so the task is dispatched only after the Postgres
-    row is fully committed — prevents Celery from reading stale data.
-    Soft-deleted products (deleted_at set) are removed from the Meilisearch index
-    by the task itself.
-    """
-    from catalog.tasks import catalog_index_product
-
-    product_id = str(instance.pk)
-
-    def _enqueue():
-        catalog_index_product.delay(product_id)
-
-    transaction.on_commit(_enqueue)
 
 
 @receiver(post_save, sender="catalog.Product")

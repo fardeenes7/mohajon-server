@@ -47,3 +47,18 @@ class AgentMessageSerializer(serializers.Serializer):
     page_id = serializers.CharField()
     psid = serializers.CharField()
     text = serializers.CharField(max_length=2000)
+
+from chat.models import WhatsAppConfig
+
+class WhatsAppConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WhatsAppConfig
+        fields = ["id", "phone_number_id", "waba_id", "is_active"]
+        read_only_fields = ["id"]
+
+class WhatsAppOAuthPageSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    display_phone_number = serializers.CharField()
+    name = serializers.CharField()
+    waba_id = serializers.CharField()
+

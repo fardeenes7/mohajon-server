@@ -68,109 +68,49 @@ def _get_page_token(shop_id: str, page_id: str) -> str | None:
 # EPIC B-01 — Webhook Verification + Ingestion
 # ---------------------------------------------------------------------------
 
-class MetaWebhookView(APIView):
+class ChannelWebhookView(APIView):
     authentication_classes = []
     permission_classes = []
+    channel = None  # Injected by urls.py for legacy route, or fetched from URL kwargs
 
-    def get(self, request):
-        """Meta webhook verification (hub.challenge handshake)."""
-        mode = request.query_params.get("hub.mode")
-        token = request.query_params.get("hub.verify_token")
-        challenge = request.query_params.get("hub.challenge")
+    def _get_adapter(self, kwargs):
+        from chat.channels.registry import get_adapter
+        channel_id = self.channel or kwargs.get("channel_id")
+        if not channel_id:
+            raise ValueError("No channel specified for webhook")
+        # Ensure it matches ChannelChoices enum formatting (e.g. FACEBOOK)
+        return get_adapter(channel_id.upper())
 
-        if mode == "subscribe" and token == settings.META_WEBHOOK_VERIFY_TOKEN:
-            return HttpResponse(challenge, content_type="text/plain")
-        return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+    def get(self, request, *args, **kwargs):
+        """Delegate webhook verification handshake to the channel adapter."""
+        try:
+            adapter = self._get_adapter(kwargs)
+            return adapter.handle_webhook_handshake(request)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-    def post(self, request):
+    def post(self, request, *args, **kwargs):
         """
-        Meta webhook event ingestion.
-        - Validates X-Hub-Signature-256 HMAC.
-        - Returns HTTP 200 immediately (Meta requires < 5s response).
-        - Fans out each messaging event as a separate Celery task.
+        Delegate payload verification and parsing to the channel adapter.
         """
-        signature = request.headers.get("X-Hub-Signature-256", "")
-        body = request.body
+        try:
+            adapter = self._get_adapter(kwargs)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not webhook_signature_valid(signature=signature, body=body):
-            logger.warning("Meta webhook: invalid HMAC signature.")
+        if not adapter.verify_webhook_signature(request):
+            logger.warning("%s webhook: invalid signature.", adapter.__class__.__name__)
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
-        data = request.data
-        if data.get("object") != "page":
-            return Response({"status": "ignored"})
-
-        for entry in data.get("entry", []):
-            page_id = str(entry.get("id", ""))
-
-            # Resolve shop from page_id
-            try:
-                conn = SocialConnection.objects.get(page_id=page_id, deleted_at__isnull=True)
-                shop_id = str(conn.shop_id)
-                page_access_token = conn.access_token
-            except Exception:
-                logger.warning("No SocialConnection found for page_id=%s", page_id)
-                continue
-
-            for event in entry.get("messaging", []):
-                psid = str(event.get("sender", {}).get("id", ""))
-                ts = int(event.get("timestamp", 0))
-
-                # Determine messaging type
-                if "message" in event:
-                    msg = event["message"]
-                    mid = msg.get("mid", f"unk_{ts}")
-                    text = msg.get("text")
-                    process_inbound_message.delay(
-                        shop_id=shop_id,
-                        page_id=page_id,
-                        psid=psid,
-                        message_text=text,
-                        mid=mid,
-                        timestamp=ts,
-                        messaging_type="message",
-                        page_access_token=page_access_token,
-                    )
-                elif "postback" in event:
-                    payload = event["postback"].get("payload", "")
-                    process_inbound_message.delay(
-                        shop_id=shop_id,
-                        page_id=page_id,
-                        psid=psid,
-                        message_text=None,
-                        mid=f"postback_{ts}",
-                        timestamp=ts,
-                        messaging_type="postback",
-                        postback_payload=payload,
-                        page_access_token=page_access_token,
-                    )
-
-            # Handle comment events
-            for change in entry.get("changes", []):
-                if change.get("field") == "feed":
-                    val = change.get("value", {})
-                    if val.get("item") == "comment" and val.get("verb") == "add":
-                        comment_id = val.get("comment_id", "")
-                        post_id = val.get("post_id", "")
-                        from_data = val.get("from", {})
-                        commenter_psid = from_data.get("id", "")
-                        process_inbound_message.delay(
-                            shop_id=shop_id,
-                            page_id=page_id,
-                            psid=commenter_psid,
-                            message_text=val.get("message"),
-                            mid=f"comment_{comment_id}",
-                            timestamp=int(val.get("created_time", 0)),
-                            messaging_type="comment",
-                            comment_data={
-                                "comment_id": comment_id,
-                                "post_id": post_id,
-                                "product_ids": [],  # resolved by marketing app in future
-                            },
-                            page_access_token=page_access_token,
-                        )
+        try:
+            events = adapter.parse_webhook_payload(request)
+            for event in events:
+                process_inbound_message.delay(**event)
+        except Exception as e:
+            logger.error("Error processing %s webhook: %s", adapter.__class__.__name__, e)
 
         return Response({"status": "ok"})
+
 
 
 # ---------------------------------------------------------------------------
@@ -235,12 +175,16 @@ class AgentSendView(APIView):
         psid = d["psid"]
         text = d["text"]
 
-        token = _get_page_token(shop_id=shop_id, page_id=page_id)
-        if not token:
-            return Response({"detail": "Page access token not found."}, status=status.HTTP_400_BAD_REQUEST)
+        from chat.models import ChannelChoices
+        from chat.channels.registry import get_adapter
+        
+        # Legacy frontend payloads only provide psid/page_id for Facebook.
+        # Future-proofing: read 'channel' from payload, but default to FACEBOOK.
+        channel = d.get("channel", ChannelChoices.FACEBOOK)
+        adapter = get_adapter(channel)
 
         try:
-            result = send_text(psid=psid, text=text, token=token)
+            adapter.send_text(shop_id=shop_id, channel_identity=psid, text=text, page_id=page_id)
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
@@ -249,7 +193,7 @@ class AgentSendView(APIView):
         conversation, created = Conversation.objects.get_or_create(
             shop_id=shop_id,
             tenant_id=shop_id,
-            channel="FACEBOOK",
+            channel=channel,
             channel_identity=psid,
         )
         
