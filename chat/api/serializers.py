@@ -25,12 +25,16 @@ class FAQEntrySerializer(serializers.ModelSerializer):
 class ConversationListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Conversation
-        fields = ["id", "channel", "channel_identity", "metadata", "updated_at", "page_id"]
+        fields = ["id", "channel", "channel_identity", "metadata", "updated_at", "page_id", "has_unread"]
 
     page_id = serializers.SerializerMethodField()
+    has_unread = serializers.SerializerMethodField()
 
     def get_page_id(self, obj) -> str | None:
         return obj.metadata.get("page_id")
+
+    def get_has_unread(self, obj) -> bool:
+        return obj.metadata.get("has_unread", False)
 
 
 class HumanTakeoverSerializer(serializers.Serializer):
