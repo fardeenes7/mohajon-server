@@ -140,3 +140,56 @@ class BotStateTakeoverTestCase(TestCase):
         
         # Ensure AI engine was NOT called
         mock_run_ai_turn.assert_not_called()
+
+class AgentSendViewTestCase(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from shops.models import Shop, SubscriptionPlan
+        import uuid
+        self.client = APIClient()
+        plan = SubscriptionPlan.objects.create(name="FREE")
+        self.shop = Shop.objects.create(id=uuid.uuid4(), name="Test Shop", subdomain="testshop", plan=plan)
+        
+        # We need a user to authenticate
+        from users.models import User
+        self.user = User.objects.create_user(email="test@test.com", password="password")
+        self.client.force_authenticate(user=self.user)
+        
+        # We also need a SocialConnection to provide page token
+        from marketing.models import SocialConnection
+        SocialConnection.objects.create(
+            shop=self.shop,
+            tenant_id=self.shop.id,
+            provider="FACEBOOK",
+            page_id="test_page_id",
+            access_token="test_token"
+        )
+        self.url = "/api/v1/chat/send/"
+
+    @patch("chat.api.views.send_text")
+    def test_agent_send_creates_message_and_conversation(self, mock_send_text):
+        mock_send_text.return_value = {"message_id": "mid.test1234"}
+        
+        # Need to simulate TenantMiddleware which sets request.tenant_id
+        # We can just override _get_shop_id or we can pass headers if Middleware is active.
+        # Let's see if we can pass HTTP_X_TENANT_ID header.
+        
+        response = self.client.post(
+            self.url,
+            {"page_id": "test_page_id", "psid": "test_psid", "text": "Hello from agent!"},
+            format="json",
+            HTTP_X_TENANT_ID=str(self.shop.id)
+        )
+        
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "sent"})
+        
+        from chat.models import Conversation, ChatMessage, MessageDirection
+        # Verify Conversation was created
+        conv = Conversation.objects.get(shop=self.shop, channel="FACEBOOK", channel_identity="test_psid")
+        self.assertIsNotNone(conv)
+        
+        # Verify ChatMessage was created
+        msg = ChatMessage.objects.get(conversation=conv)
+        self.assertEqual(msg.direction, MessageDirection.OUTBOUND)
+        self.assertEqual(msg.text, "Hello from agent!")

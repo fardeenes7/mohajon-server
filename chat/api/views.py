@@ -245,14 +245,24 @@ class AgentSendView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         # Persist the agent-sent message
+        from chat.models import Conversation
+        conversation, created = Conversation.objects.get_or_create(
+            shop_id=shop_id,
+            tenant_id=shop_id,
+            channel="FACEBOOK",
+            channel_identity=psid,
+        )
+        
+        if created or conversation.metadata.get("page_id") != page_id:
+            conversation.metadata["page_id"] = page_id
+            conversation.save(update_fields=["metadata"])
+
         ChatMessage.objects.create(
             shop_id=shop_id,
             tenant_id=shop_id,
-            psid=psid,
-            page_id=page_id,
+            conversation=conversation,
             direction=MessageDirection.OUTBOUND,
-            message_text=text,
-            mid=result.get("message_id", f"agent_{int(time.time() * 1000)}"),
+            text=text,
             timestamp=int(time.time() * 1000),
         )
         return Response({"status": "sent"})

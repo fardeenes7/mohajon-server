@@ -1,0 +1,14 @@
+--- serializers.py
++++ serializers.py
+@@ -26,3 +26,10 @@
+     class Meta:
+         model = Conversation
+-        fields = ["id", "channel", "channel_identity", "metadata", "updated_at"]
++        fields = ["id", "channel", "channel_identity", "metadata", "updated_at", "page_id"]
++
++    page_id = serializers.SerializerMethodField()
++
++    def get_page_id(self, obj) -> str:
++        # Currently tasks/__init__.py uses page_id as channel for Meta
++        # In the future it might move to metadata.
++        return obj.metadata.get("page_id") or obj.channel

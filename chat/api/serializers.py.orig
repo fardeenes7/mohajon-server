@@ -25,12 +25,7 @@ class FAQEntrySerializer(serializers.ModelSerializer):
 class ConversationListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Conversation
-        fields = ["id", "channel", "channel_identity", "metadata", "updated_at", "page_id"]
-
-    page_id = serializers.SerializerMethodField()
-
-    def get_page_id(self, obj) -> str | None:
-        return obj.metadata.get("page_id")
+        fields = ["id", "channel", "channel_identity", "metadata", "updated_at"]
 
 
 class HumanTakeoverSerializer(serializers.Serializer):

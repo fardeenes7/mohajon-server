@@ -85,16 +85,21 @@ def _persist_message(
     text: str | None,
     timestamp: int,
     attachment_payload: dict | None = None,
+    page_id: str | None = None,
 ) -> None:
     from chat.models import Conversation, ChatMessage
     
-    conversation, _ = Conversation.objects.get_or_create(
+    conversation, created = Conversation.objects.get_or_create(
         shop_id=shop_id,
         tenant_id=shop_id,
         channel=channel,
         channel_identity=channel_identity,
     )
     
+    if page_id and conversation.metadata.get("page_id") != page_id:
+        conversation.metadata["page_id"] = page_id
+        conversation.save(update_fields=["metadata"])
+
     ChatMessage.objects.create(
         shop_id=shop_id,
         tenant_id=shop_id,
@@ -117,6 +122,7 @@ def run_ai_turn(
     channel_identity: str,
     inbound_text: str,
     inbound_timestamp: int,
+    page_id: str | None = None,
     context_window_size: int = 20,
     fallback_message: str | None = None,
 ) -> str:
@@ -139,16 +145,17 @@ def run_ai_turn(
         shop_id=shop_id, channel=channel, channel_identity=channel_identity,
         direction=MessageDirection.INBOUND,
         text=inbound_text, timestamp=inbound_timestamp,
+        page_id=page_id,
     )
 
     # 2. Load context
-    ctx_messages = ctx_cache_get(page_id=channel, psid=channel_identity)
+    ctx_messages = ctx_cache_get(page_id=page_id or channel, psid=channel_identity)
     if ctx_messages is None:
         # Cold path — load from Postgres and warm the cache
         db_messages = message_list_for_psid(
             shop_id=shop_id, psid=channel_identity, limit=context_window_size
         )
-        ctx_cache_populate(page_id=channel, psid=channel_identity, messages=db_messages, max_size=context_window_size)
+        ctx_cache_populate(page_id=page_id or channel, psid=channel_identity, messages=db_messages, max_size=context_window_size)
         ctx_messages = db_messages
 
     # Build messages list for OpenAI
@@ -161,7 +168,7 @@ def run_ai_turn(
 
     # 3. Credit pre-check
     if not has_sufficient_ai_credits(shop_id=shop_id):
-        _handle_credit_exhaustion(shop_id=shop_id, page_id=channel, psid=channel_identity)
+        _handle_credit_exhaustion(shop_id=shop_id, page_id=page_id or channel, psid=channel_identity)
         return fallback_message or "I'm having a little trouble right now. Our team will reach out shortly! 🙏"
 
     # 4. OpenAI tool-call loop — all AI concerns routed through AIGateway
@@ -206,7 +213,7 @@ def run_ai_turn(
                         tool_args=tool_args,
                         shop_id=shop_id,
                         psid=channel_identity,
-                        page_id=channel,
+                        page_id=page_id or channel,
                     )
                     openai_messages.append({
                         "role": "tool",
@@ -238,9 +245,10 @@ def run_ai_turn(
         shop_id=shop_id, channel=channel, channel_identity=channel_identity,
         direction=MessageDirection.OUTBOUND,
         text=final_reply, timestamp=out_ts,
+        page_id=page_id,
     )
-    ctx_cache_append(page_id=channel, psid=channel_identity, role="user", content=inbound_text)
-    ctx_cache_append(page_id=channel, psid=channel_identity, role="assistant", content=final_reply)
+    ctx_cache_append(page_id=page_id or channel, psid=channel_identity, role="user", content=inbound_text)
+    ctx_cache_append(page_id=page_id or channel, psid=channel_identity, role="assistant", content=final_reply)
 
     return final_reply
 

@@ -9,10 +9,11 @@ from billing.models import (
     ShopSubscription, PaymentGatewayConfig, PaymentMethod, 
     MerchantAPIToken, OutboundWebhook, AICreditPackage, AICreditTopUp
 )
+from ai.models import AIUsageLog
 from billing.api.serializers import (
     ShopSubscriptionSerializer, PaymentGatewayConfigSerializer, PaymentMethodSerializer,
     MerchantAPITokenSerializer, OutboundWebhookSerializer, AICreditPackageSerializer,
-    AICreditTopUpSerializer
+    AICreditTopUpSerializer, AIUsageLogSerializer
 )
 from billing.services.ai_credits import AICreditService
 # ... other imports ...
@@ -218,3 +219,11 @@ class OutboundWebhookViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         shop_id = ShopDetailView()._resolve_shop_id(self.request)
         serializer.save(shop_id=shop_id, tenant_id=shop_id)
+
+class AIUsageLogViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = AIUsageLogSerializer
+
+    def get_queryset(self):
+        shop_id = ShopDetailView()._resolve_shop_id(self.request)
+        return AIUsageLog.objects.filter(shop_id=shop_id).order_by('-created_at')

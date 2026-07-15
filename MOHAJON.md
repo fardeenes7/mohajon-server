@@ -92,3 +92,13 @@ The platform architecture splits AI generation and Chat mechanics into two disti
 - **Soft-deletion assertions**: Untested (`deleted_at` field behavior).
 - **Category hierarchy depth / `sort_order` behavior**: Untested in nested trees.
 - **FTS relevance/ranking correctness**: Untested with multiple distinct products (only signal-fires and fallback-triggers were tested, not actual result quality/ranking).
+
+### Channel, Identity, and Page ID Semantics
+- **`channel`**: Must be a `ChannelChoices` value (e.g., `"FACEBOOK"`, `"WEB_WIDGET"`, `"WHATSAPP"`). It defines the platform, NOT a specific page or provider instance.
+- **`channel_identity`**: The unique identifier for the user on that channel (e.g., PSID for Facebook, phone number for WhatsApp).
+- **`page_id`**: For platforms like Facebook where a shop might have multiple pages, the specific Page ID should be stored in the `Conversation.metadata["page_id"]`. It must NEVER be overloaded into the `channel` field, as doing so breaks cross-channel logic and channel-based frontend filtering.
+
+### Historical Test Counts (July 2026 Audit)
+- Previous prompt sessions incorrectly referenced "57 tests in catalog" and "46 tests post-refactor". 
+- Full `git log` and `git diff-filter=D` audits confirmed these numbers never existed in the repository. They were an AI hallucination. The catalog app had exactly 11 tests upon initial creation.
+- The true baseline as of this audit is exactly 80 tests. No tests were silently dropped by the Django test runner during discovery.

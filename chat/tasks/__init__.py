@@ -119,8 +119,9 @@ def process_inbound_message(
 
     reply = run_ai_turn(
         shop_id=shop_id,
-        channel=page_id,  # Using page_id as channel for Meta
+        channel="FACEBOOK",
         channel_identity=psid,
+        page_id=page_id,
         inbound_text=message_text,
         inbound_timestamp=timestamp,
         context_window_size=ctx_size,
