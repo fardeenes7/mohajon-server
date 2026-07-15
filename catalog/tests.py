@@ -29,7 +29,9 @@ class CatalogBaseTestCase(TestCase):
 
         # Clients setup
         self.client_a = APIClient()
-        self.client_a.force_authenticate(user=self.user_a)
+        from rest_framework_simplejwt.tokens import RefreshToken
+        token = RefreshToken.for_user(self.user_a).access_token
+        self.client_a.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
         # Mock tenant_id header which the view might expect (using X-Tenant-ID or middleware injects it)
         # Assuming the middleware injects request.tenant_id based on a header. 
         # Wait, the views do: getattr(request, "tenant_id", None)
@@ -226,3 +228,15 @@ class TestAIFacadeEndpoints(CatalogBaseTestCase):
         response = self.client_a.post("/api/v1/catalog/products/ai-generate-description/", data, format="json")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["description"], "<p>Amazing product!</p>")
+
+class TestTenantSpoofing(CatalogBaseTestCase):
+    def test_cross_tenant_spoofing_blocked(self):
+        # user_a is only a member of shop_a.
+        # They try to access shop_b's products by explicitly setting X-Tenant-ID.
+        # Before the fix, this succeeds and returns shop_b's data.
+        # After the fix, it should return 403 Forbidden.
+        response = self.client_a.get(
+            "/api/v1/catalog/products/",
+            HTTP_X_TENANT_ID=str(self.shop_b.id)
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

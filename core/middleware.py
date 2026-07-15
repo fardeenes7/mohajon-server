@@ -24,6 +24,45 @@ class TenantMiddleware:
             try:
                 # Basic validation to prevent SQLi
                 uuid.UUID(tenant_id)
+                
+                # Authorization check
+                user = getattr(request, "user", None)
+                print("DEBUG: middleware user", type(user), user.is_authenticated if hasattr(user, 'is_authenticated') else None)
+                print("DEBUG: _force_auth_user", getattr(request, "_force_auth_user", "MISSING"))
+                # DRF test client sets _force_auth_user on the HttpRequest
+                if not user or not user.is_authenticated:
+                    if getattr(request, "_force_auth_user", None):
+                        user = request._force_auth_user
+                
+                if not user or not user.is_authenticated:
+                    # Attempt DRF JWT Authentication
+                    try:
+                        from rest_framework_simplejwt.authentication import JWTAuthentication
+                        from rest_framework.request import Request
+                        
+                        # JWTAuthentication requires a DRF Request object to check headers/cookies
+                        drf_request = Request(request)
+                        jwt_auth = JWTAuthentication()
+                        auth_result = jwt_auth.authenticate(drf_request)
+                        if auth_result:
+                            user, token = auth_result
+                            request.user = user
+                    except Exception:
+                        pass
+
+                if not user or not user.is_authenticated:
+                    return JsonResponse({"detail": "Authentication required to use X-Tenant-ID."}, status=401)
+                
+                from shops.models import ShopMember
+                is_member = ShopMember.objects.filter(
+                    user=user,
+                    shop_id=tenant_id,
+                    deleted_at__isnull=True,
+                    shop__deleted_at__isnull=True,
+                ).exists()
+                
+                if not is_member:
+                    return JsonResponse({"detail": "You do not have access to this shop."}, status=403)
             except ValueError:
                 tenant_id = None
 
@@ -72,6 +111,8 @@ class TenantMiddleware:
 
         # Since Django opens a fresh transaction or just executes within the connection thread:
         with connection.cursor() as cursor:
+            # Explicitly clear bypass in case of connection pool leakage
+            cursor.execute("SET app.bypass_rls = 'off'")
             if tenant_id:
                 # `app.current_shop_id` will be used in PostgreSQL RLS policies
                 cursor.execute("SET app.current_shop_id = %s", [tenant_id])
@@ -83,6 +124,7 @@ class TenantMiddleware:
         # Clear it structurally ensuring no connection pooling leak if transaction mode is weird
         with connection.cursor() as cursor:
             cursor.execute("SET app.current_shop_id = ''")
+            cursor.execute("SET app.bypass_rls = 'off'")
 
         clear_request_context()
 

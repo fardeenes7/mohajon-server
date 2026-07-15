@@ -155,6 +155,9 @@ class AgentSendViewTestCase(TestCase):
         self.user = User.objects.create_user(email="test@test.com", password="password")
         self.client.force_authenticate(user=self.user)
         
+        from shops.models import ShopMember
+        ShopMember.objects.create(shop=self.shop, user=self.user, role="OWNER")
+        
         # We also need a SocialConnection to provide page token
         from marketing.models import SocialConnection
         SocialConnection.objects.create(

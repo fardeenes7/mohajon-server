@@ -13,6 +13,7 @@ from shops.api.serializers import StoreThemeSerializer
 from catalog.models import Product
 from catalog.selectors import product_get_for_storefront, product_list_for_storefront
 from shops.models import Shop
+from core.services.rls import tenant_context
 from rest_framework import serializers
 from django.core.paginator import Paginator
 
@@ -44,15 +45,16 @@ class StorefrontProductListView(APIView):
         except Shop.DoesNotExist:
             return Response({"detail": "Shop not found."}, status=404)
 
-        qs = product_list_for_storefront(
-            shop_id=str(shop.id),
-            category_slug=request.query_params.get("category"),
-        )
+        with tenant_context(shop.id):
+            qs = product_list_for_storefront(
+                shop_id=str(shop.id),
+                category_slug=request.query_params.get("category"),
+            )
 
-        # Simple cursor pagination for storefront
-        page_size = min(int(request.query_params.get("page_size", 24)), 100)
-        paginator = Paginator(qs, page_size)
-        page = paginator.get_page(int(request.query_params.get("page", 1)))
+            # Simple cursor pagination for storefront
+            page_size = min(int(request.query_params.get("page_size", 24)), 100)
+            paginator = Paginator(qs, page_size)
+            page = paginator.get_page(int(request.query_params.get("page", 1)))
 
         return Response({
             "count": paginator.count,
@@ -79,9 +81,10 @@ class StorefrontProductDetailView(APIView):
             return Response({"detail": "Shop not found."}, status=404)
 
         try:
-            product = product_get_for_storefront(
-                shop_id=str(shop.id), slug=slug
-            )
+            with tenant_context(shop.id):
+                product = product_get_for_storefront(
+                    shop_id=str(shop.id), slug=slug
+                )
         except Product.DoesNotExist:
             return Response({"detail": "Product not found."}, status=404)
 
