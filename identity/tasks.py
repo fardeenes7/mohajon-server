@@ -103,6 +103,54 @@ def resolve_order_identity_graph(order_id: str) -> dict:
                     when=now,
                 )
 
+        # 5. Layer 3 — attribute the order's signals to a Person (evidence tiers,
+        #    design doc §6) and resolve/link the order's ChannelActor. The
+        #    snapshot's resolved ContactPoint FKs are already set in-memory
+        #    (step 2), so attribution reads them without a reload. Kept inside the
+        #    same transaction and behind the resolved_at guard, so Person
+        #    resolution is as idempotent as the rest of the task.
+        person = resolution.attribute_snapshot_to_person(snapshot, when=now)
+
+        # 6. Back-link the order's tenant-scoped CustomerProfile to the resolved
+        #    global Person. Cross-app write goes through shops.services by UUID
+        #    (never importing shops models here) to preserve the app seam. A
+        #    shops-side failure must not roll back identity resolution, so it is
+        #    isolated in its own savepoint and swallowed.
+        if customer_profile_id and person is not None:
+            try:
+                with transaction.atomic():
+                    from shops.services import link_profile_to_person
+
+                    link_profile_to_person(
+                        customer_profile_id=str(customer_profile_id),
+                        person_id=str(person.id),
+                    )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "link_profile_to_person failed for order %s (profile=%s person=%s)",
+                    order_id,
+                    customer_profile_id,
+                    person.id,
+                )
+
+        # 7. Record the neutral "order placed" FACT for the resolved Person
+        #    (design doc §7). Done here, not at checkout, because the Person is
+        #    only attributed now (checkout runs before async resolution). Behind
+        #    the resolved_at guard so a retried task never double-counts.
+        #    Resilient: a facts-side failure must not roll back resolution.
+        if person is not None:
+            try:
+                with transaction.atomic():
+                    from identity.services import behavioral
+
+                    behavioral.record_order_placed(order=snapshot.order, when=now)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "record_order_placed failed for order %s (person=%s)",
+                    order_id,
+                    person.id,
+                )
+
         snapshot.resolved_at = now
         snapshot.save(
             update_fields=[
@@ -118,4 +166,5 @@ def resolve_order_identity_graph(order_id: str) -> dict:
         "status": "resolved",
         "order_id": order_id,
         "contact_points": len(resolved),
+        "person_id": str(person.id) if person is not None else None,
     }

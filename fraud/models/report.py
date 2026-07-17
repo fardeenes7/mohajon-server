@@ -1,9 +1,9 @@
-import hashlib
 import uuid
 
 from django.db import models
 
 from core.models import TenantModel
+from core.phone import HASH_VERSION, hash_phone
 
 class FraudReport(TenantModel):
     """
@@ -29,11 +29,20 @@ class FraudReport(TenantModel):
     
     # Hashed PII (For cross-platform pooling)
     phone_hash = models.CharField(max_length=64, db_index=True)
+    hash_version = models.PositiveSmallIntegerField(default=0)
     
     reason = models.CharField(max_length=20, choices=REASON_CHOICES)
     weight = models.IntegerField(default=10)
     notes = models.TextField(blank=True)
-    
+
+    # Misuse protection (design doc Phase 4.3): a report only contributes to the
+    # cross-shop GlobalFraudPool once it is validated — i.e. tied to a genuine
+    # order between the reporting shop and the target, and within rate limits.
+    # The pool signal gates on this flag so a shop cannot poison a phone's pooled
+    # score without a real transaction. The report row is still stored either way
+    # (the reporting shop sees its own reports via RLS regardless).
+    counts_toward_pool = models.BooleanField(default=False)
+
     reported_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -47,9 +56,14 @@ class FraudReport(TenantModel):
         if not self.tenant_id:
             self.tenant_id = self.shop_id
         
-        # Generate hash for pooling (sha256 of normalized phone)
+        # Generate hash for pooling via the canonical phone module (E.164 sha256).
+        # Keep the raw phone_number as-is: it's PII kept for the reporting shop.
+        self.phone_hash = hash_phone(self.phone_number)
+        self.hash_version = HASH_VERSION
+
+        # PhoneIdentity backfill lookup — left as-is; another agent owns
+        # PhoneIdentity normalization.
         normalized_phone = "".join(filter(str.isdigit, self.phone_number))
-        self.phone_hash = hashlib.sha256(normalized_phone.encode()).hexdigest()
         if not self.phone_identity_id and normalized_phone:
             from users.models import PhoneIdentity
 

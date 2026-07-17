@@ -95,10 +95,31 @@ def _persist_message(
         channel=channel,
         channel_identity=channel_identity,
     )
-    
+
     if page_id and conversation.metadata.get("page_id") != page_id:
         conversation.metadata["page_id"] = page_id
         conversation.save(update_fields=["metadata"])
+
+    # Layer 2 identity seam: resolve/create the ChannelActor and attach it to the
+    # conversation. This is the ONLY entry point into the identity graph — never
+    # import identity models here. Resilience is mandatory: identity resolution
+    # must NEVER break message persistence, so any failure is logged and swallowed.
+    if conversation.actor_id is None:
+        try:
+            from identity.services.actors import get_or_create_channel_actor
+
+            actor = get_or_create_channel_actor(
+                shop_id=shop_id,
+                channel=channel,
+                channel_identity=channel_identity,
+            )
+            conversation.actor = actor
+            conversation.save(update_fields=["actor"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ChannelActor resolution failed for shop=%s channel=%s identity=%s: %s",
+                shop_id, channel, channel_identity, exc,
+            )
 
     ChatMessage.objects.create(
         shop_id=shop_id,
@@ -214,6 +235,7 @@ def run_ai_turn(
                         shop_id=shop_id,
                         psid=channel_identity,
                         page_id=page_id or channel,
+                        channel=channel,
                     )
                     openai_messages.append({
                         "role": "tool",

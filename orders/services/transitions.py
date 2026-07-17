@@ -1,7 +1,12 @@
+import logging
+
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 
 from compliance.audit import audit_event_create
 from orders.models import Order, OrderStatus, OrderTransitionLog
+
+logger = logging.getLogger(__name__)
 
 
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
@@ -99,4 +104,27 @@ def order_transition(
             dispatch_fraud_event(order, event_type=FraudEventType.ORDER_CANCELLED, base_penalty=2)
         if to_status == OrderStatus.RTO_RETURNED:
             dispatch_fraud_event(order, event_type=FraudEventType.DELIVERY_FAILED, base_penalty=20)
+
+    # Record the neutral behavioral FACT for the resolved Person (design doc §7).
+    # Separate from fraud scoring above: this is an observation, not a judgment,
+    # and DELIVERED (a positive signal fraud does not track) is recorded too.
+    # Resilient by contract — a facts-side failure must not roll back the
+    # transition, so it is isolated in a savepoint and swallowed.
+    if to_status in {OrderStatus.DELIVERED, OrderStatus.RTO_RETURNED, OrderStatus.CANCELLED}:
+        try:
+            with transaction.atomic():
+                from identity.services import behavioral
+
+                if to_status == OrderStatus.DELIVERED:
+                    behavioral.record_order_delivered(order)
+                elif to_status == OrderStatus.RTO_RETURNED:
+                    behavioral.record_order_rto(order)
+                else:
+                    behavioral.record_order_cancelled(order)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "behavioral aggregate update failed for order %s -> %s",
+                order.id,
+                to_status,
+            )
     return order

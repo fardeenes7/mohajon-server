@@ -169,14 +169,53 @@ class ShopSettings(TenantModel):
 
 class CustomerProfile(TenantModel):
     """
-    End-Buyer identity mapped per Shop.
-    Inherits from TenantModel to enforce RLS visibility per shop.
+    End-Buyer identity mapped per Shop — the tenant-scoped PROJECTION of a
+    global identity.Person.
+
+    Inherits from TenantModel to enforce RLS visibility per shop. `shop` is now
+    explicit (the inherited `tenant_id` UUID alone was too weak to anchor
+    anything), and `person` links this per-shop projection to the global
+    resolved identity so risk/analytics can traverse profile → person → all
+    signals across channels. `person` is a cross-app-seam FK to identity.Person
+    referenced by string, so shops never imports identity models directly.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shop = models.ForeignKey(
+        Shop,
+        on_delete=models.CASCADE,
+        related_name="customer_profiles",
+        null=True,
+        blank=True,
+    )
+    person = models.ForeignKey(
+        "identity.Person",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="customer_profiles",
+    )
     phone_number = models.CharField(max_length=20, db_index=True)
     name = models.CharField(max_length=255, blank=True)
     loyalty_points = models.IntegerField(default=0)
-    
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["shop", "person"],
+                condition=models.Q(person__isnull=False, deleted_at__isnull=True),
+                name="uq_customer_profile_shop_person",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["shop", "phone_number"], name="custprofile_shop_phone_idx"),
+            models.Index(fields=["person"], name="custprofile_person_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.tenant_id and self.shop_id:
+            self.tenant_id = self.shop_id
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.name} ({self.phone_number})"
 

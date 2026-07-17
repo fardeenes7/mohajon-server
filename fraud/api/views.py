@@ -46,6 +46,17 @@ class FraudViewSet(viewsets.ViewSet):
         if not phone_number or not reason:
             return Response({"error": "phone_number and reason are required"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Misuse protection (design doc Phase 4.3): a report only affects the
+        # shared pool if the reporting shop has a genuine order with this phone
+        # and is under its rate limit. Failing reports are still persisted for the
+        # shop's private record, but flagged so the pool sync skips them. This is
+        # what stops a shop poisoning an arbitrary victim's cross-shop score.
+        from fraud.services.misuse import evaluate_report_eligibility
+
+        eligibility = evaluate_report_eligibility(
+            shop_id=str(shop_id), phone_number=phone_number, order_id=order_id
+        )
+
         report = FraudReport.objects.create(
             shop_id=shop_id,
             phone_number=phone_number,
@@ -54,6 +65,7 @@ class FraudViewSet(viewsets.ViewSet):
             notes=notes,
             order_id=order_id,
             merchant_id=merchant_id,
+            counts_toward_pool=eligibility["counts_toward_pool"],
         )
         if order_id:
             from orders.models import Order

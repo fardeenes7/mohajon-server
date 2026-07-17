@@ -47,13 +47,28 @@ def courier_consignment_upsert(
 def courier_apply_status_from_webhook(
     *,
     payload: dict,
+    provider: str | None = None,
     actor_user_id: str | None = None,
 ) -> CourierConsignment:
-    provider = str(payload.get("provider") or CourierProvider.OTHER).upper()
-    external_consignment_id = str(payload.get("consignment_id") or payload.get("id") or "")
-    order_id = str(payload.get("order_id") or "")
-    status = str(payload.get("status") or "").upper()
-    tracking_code = str(payload.get("tracking_code") or "")
+    provider = str(provider or payload.get("provider") or CourierProvider.OTHER).upper()
+    
+    from orders.services.courier_registry import courier_registry
+    courier_impl = courier_registry.get_provider(provider)
+    
+    if courier_impl:
+        parsed_data = courier_impl.parse_webhook_payload(payload)
+        external_consignment_id = str(parsed_data.get("external_consignment_id") or "")
+        order_id = str(parsed_data.get("order_id") or "")
+        status = str(parsed_data.get("status") or "").upper()
+        tracking_code = str(parsed_data.get("tracking_code") or "")
+        success_rate = parsed_data.get("success_rate")
+    else:
+        # Fallback to direct mapping for OTHER/unregistered providers
+        external_consignment_id = str(payload.get("consignment_id") or payload.get("id") or "")
+        order_id = str(payload.get("order_id") or "")
+        status = str(payload.get("status") or "").upper()
+        tracking_code = str(payload.get("tracking_code") or "")
+        success_rate = payload.get("success_rate") or payload.get("delivery_success_rate")
 
     if not order_id or not external_consignment_id or not status:
         raise ValueError("order_id, consignment_id and status are required.")
@@ -104,5 +119,16 @@ def courier_apply_status_from_webhook(
                 "status": status,
             },
         )
+        
+        # Phase 5: Ingest courier delivery-success-rate feed if present.
+        if success_rate is not None:
+            from identity.services.behavioral import _terminal_person_for_order, ingest_courier_success_rate
+            person = _terminal_person_for_order(order)
+            if person:
+                try:
+                    ingest_courier_success_rate(person_id=str(person.id), rate=float(success_rate))
+                except (ValueError, TypeError):
+                    pass
 
         return consignment
+

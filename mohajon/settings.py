@@ -277,6 +277,19 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': 60 * 10,  # Every 10 minutes
         'options': {'queue': 'default'},
     },
+    # Fraud policy sweeps (Phase 4.2): risk decays toward neutral when a profile
+    # goes quiet; trust is recomputed from delivered history in the behavioral
+    # aggregate. Both idempotent — daily cadence is enough.
+    'decay-fraud-risk-scores-daily': {
+        'task': 'fraud.tasks.decay_risk_scores',
+        'schedule': 60 * 60 * 24,  # Every 24 hours
+        'options': {'queue': 'default'},
+    },
+    'refresh-trust-scores-daily': {
+        'task': 'fraud.tasks.refresh_trust_scores',
+        'schedule': 60 * 60 * 24,  # Every 24 hours
+        'options': {'queue': 'default'},
+    },
 }
 CELERY_TIMEZONE = TIME_ZONE
 

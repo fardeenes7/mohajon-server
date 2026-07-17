@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional
 
-from django.db import models, transaction
+from django.db import transaction
 from django.utils import timezone
 
 from fraud.models import (
@@ -233,35 +233,6 @@ def dispatch_fraud_event(order, event_type: str, base_penalty: int = 0, metadata
 
     if event_type in {FraudEventType.ORDER_CANCELLED, FraudEventType.DELIVERY_FAILED, FraudEventType.FRAUD_REPORT_ADDED}:
         apply_fraud_penalty(order, event_type=event_type, base_penalty=base_penalty)
-
-
-def update_fraud_score(phone_identity: PhoneIdentity) -> FraudProfile:
-    profile = _get_or_create_profile(
-        FraudTargetType.PHONE,
-        str(phone_identity.id),
-        phone_identity=phone_identity,
-    )
-
-    score = (
-        FraudEvent.objects.filter(
-            fraud_profile=profile,
-            source_type=FraudEventSource.PHONE,
-        )
-        .aggregate(total=models.Sum("score_impact"))
-        .get("total")
-        or 0
-    )
-    profile.risk_score = score
-
-    if score >= RISK_LEVEL_THRESHOLDS[FraudRiskLevel.MEDIUM]:
-        profile.risk_level = FraudRiskLevel.HIGH
-    elif score >= RISK_LEVEL_THRESHOLDS[FraudRiskLevel.LOW]:
-        profile.risk_level = FraudRiskLevel.MEDIUM
-    else:
-        profile.risk_level = FraudRiskLevel.LOW
-
-    profile.save(update_fields=["risk_score", "risk_level", "updated_at"])
-    return profile
 
 
 def evaluate_abuse_patterns(actor_reference: str) -> None:

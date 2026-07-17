@@ -8,7 +8,8 @@ class GlobalFraudPool(models.Model):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     phone_hash = models.CharField(max_length=64, unique=True, db_index=True)
-    
+    hash_version = models.PositiveSmallIntegerField(default=0)
+
     rto_count = models.PositiveIntegerField(default=0)
     fake_order_count = models.PositiveIntegerField(default=0)
     harassment_count = models.PositiveIntegerField(default=0)

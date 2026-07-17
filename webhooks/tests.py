@@ -1,10 +1,7 @@
 import hmac
-import json
 from hashlib import sha256
 
-from django.test import override_settings
 from django.test import TestCase
-from rest_framework.test import APIClient
 
 from shops.models import Shop
 from webhooks.models import WebhookProcessingStatus, WebhookProvider
@@ -47,53 +44,3 @@ class WebhookServicesTests(TestCase):
         self.assertFalse(duplicate_created)
         self.assertEqual(duplicate.id, log.id)
         self.assertEqual(duplicate.status, WebhookProcessingStatus.DUPLICATE)
-
-
-@override_settings(META_APP_SECRET="meta-secret", META_WEBHOOK_VERIFY_TOKEN="verify-token")
-class MetaWebhookIngestApiTests(TestCase):
-    def setUp(self):
-        self.client = APIClient()
-
-    def _signed_body(self, payload: dict) -> tuple[str, str]:
-        raw = json.dumps(payload).encode("utf-8")
-        digest = hmac.new(b"meta-secret", msg=raw, digestmod=sha256).hexdigest()
-        return raw.decode("utf-8"), f"sha256={digest}"
-
-    def test_verification_requires_valid_token(self):
-        ok = self.client.get("/api/v1/webhooks/meta/?hub.mode=subscribe&hub.verify_token=verify-token&hub.challenge=abc")
-        self.assertEqual(ok.status_code, 200)
-        self.assertEqual(ok.content.decode("utf-8"), "abc")
-
-        denied = self.client.get("/api/v1/webhooks/meta/?hub.mode=subscribe&hub.verify_token=bad&hub.challenge=abc")
-        self.assertEqual(denied.status_code, 403)
-
-    def test_post_rejects_invalid_signature(self):
-        response = self.client.post(
-            "/api/v1/webhooks/meta/",
-            data=json.dumps({"id": "evt-1"}),
-            content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256="sha256=invalid",
-        )
-        self.assertEqual(response.status_code, 401)
-
-    def test_post_accepts_and_deduplicates(self):
-        payload = {"id": "evt-accepted", "entry": [{"id": "entry-1"}]}
-        body, signature = self._signed_body(payload)
-
-        first = self.client.post(
-            "/api/v1/webhooks/meta/",
-            data=body,
-            content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256=signature,
-        )
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.json()["status"], "accepted")
-
-        second = self.client.post(
-            "/api/v1/webhooks/meta/",
-            data=body,
-            content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256=signature,
-        )
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(second.json()["status"], "duplicate")

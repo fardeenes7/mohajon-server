@@ -5,6 +5,7 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
+from core import phone as canonical_phone
 from core.models import SoftDeleteModel
 
 class UserManager(BaseUserManager):
@@ -72,6 +73,7 @@ class PhoneIdentity(models.Model):
     phone_number = models.CharField(max_length=20, unique=True, db_index=True)
     phone_hash = models.CharField(max_length=64, unique=True, db_index=True)
     phone_suffix = models.CharField(max_length=4, db_index=True)
+    hash_version = models.PositiveSmallIntegerField(default=0)
     is_verified = models.BooleanField(default=False)
     trust_score = models.IntegerField(default=0)
     last_verified_at = models.DateTimeField(null=True, blank=True)
@@ -84,10 +86,13 @@ class PhoneIdentity(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        normalized = normalize_phone(self.phone_number)
-        self.phone_number = normalized
-        self.phone_hash = hash_text(normalized)
-        self.phone_suffix = normalized[-4:] if len(normalized) >= 4 else normalized
+        raw = self.phone_number
+        canonical = canonical_phone.normalize_phone_e164(raw)
+        # Fall back to raw digits so we never silently store an empty phone.
+        self.phone_number = canonical or normalize_phone(raw)
+        self.phone_hash = canonical_phone.hash_phone(raw)
+        self.phone_suffix = canonical_phone.phone_suffix(raw)
+        self.hash_version = canonical_phone.HASH_VERSION
         super().save(*args, **kwargs)
 
 

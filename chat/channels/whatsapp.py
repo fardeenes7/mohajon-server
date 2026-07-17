@@ -76,8 +76,15 @@ class WhatsAppAdapter(BaseChannelAdapter):
                     # We map `sender_psid` to `psid` so the generic system works.
                     # We map `phone_number_id` to `page_id`.
                     events.append({
+                        # WhatsApp waid IS the phone number — it must be stored
+                        # against the WHATSAPP value space, never as a FACEBOOK
+                        # psid. This channel tag flows through
+                        # process_inbound_message → run_ai_turn → _persist_message
+                        # → get_or_create_channel_actor, where the waid mints a
+                        # PHONE ContactPoint.
+                        "channel": "WHATSAPP",
                         "shop_id": shop_id,
-                        "page_id": phone_number_id, 
+                        "page_id": phone_number_id,
                         "psid": sender_psid,
                         "message_text": text,
                         "mid": mid,

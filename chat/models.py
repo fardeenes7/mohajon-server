@@ -35,10 +35,32 @@ class Conversation(TenantModel):
     channel = models.CharField(max_length=20, choices=ChannelChoices.choices)
     channel_identity = models.CharField(max_length=255, db_index=True)
     metadata = models.JSONField(default=dict, blank=True)
+    # Layer 2 identity seam: the durable ChannelActor behind this conversation.
+    # Conversation keeps grouping messages; identity moves to the actor.
+    # SET_NULL so identity graph churn never cascades into message history.
+    actor = models.ForeignKey(
+        "identity.ChannelActor",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversations",
+    )
 
     class Meta:
         indexes = [
             models.Index(fields=["shop", "channel", "channel_identity"], name="conv_shop_chan_id_idx"),
+        ]
+        constraints = [
+            # A channel actor (PSID/waid/web-session) has exactly one live
+            # conversation per shop+channel. Without this, concurrent inbound
+            # messages race through get_or_create into duplicate conversations.
+            # Partial (deleted_at IS NULL) so a soft-deleted row can be replaced,
+            # mirroring the StockLocation default-location constraint.
+            models.UniqueConstraint(
+                fields=["shop", "channel", "channel_identity"],
+                condition=models.Q(deleted_at__isnull=True),
+                name="uq_conversation_shop_channel_identity",
+            ),
         ]
 
     def __str__(self) -> str:

@@ -15,29 +15,32 @@ from identity.services.resolution import (
     upsert_customer_contact_point,
 )
 from shops.models import CustomerProfile, Shop
-from users.models import PhoneIdentity, hash_text, normalize_phone
+from users.models import PhoneIdentity, hash_text
 
 
 class HashingTests(TestCase):
-    def test_canonicalize_phone_collapses_country_code_variants(self):
-        # Local, international, and formatted forms → one canonical core.
-        self.assertEqual(hashing.canonicalize_phone("01712345678"), "1712345678")
-        self.assertEqual(hashing.canonicalize_phone("+880 1712-345678"), "1712345678")
-        self.assertEqual(hashing.canonicalize_phone("8801712345678"), "1712345678")
+    def test_canonicalize_phone_returns_e164(self):
+        # Post-unify: canonicalize_phone now returns the shared E.164 form (via
+        # core.phone), not the old national-core digits.
+        self.assertEqual(hashing.canonicalize_phone("01712345678"), "+8801712345678")
+        self.assertEqual(hashing.canonicalize_phone("+880 1712-345678"), "+8801712345678")
+        self.assertEqual(hashing.canonicalize_phone("8801712345678"), "+8801712345678")
 
     def test_hash_phone_identical_across_formatting(self):
         h1 = hashing.hash_phone("01712345678")
         h2 = hashing.hash_phone("+8801712345678")
         self.assertEqual(h1, h2)
-        # 64-char sha256 hex, same primitive as users.hash_text.
+        # 64-char sha256 hex over the canonical E.164 form.
         self.assertEqual(len(h1), 64)
-        self.assertEqual(h1, hash_text("1712345678"))
+        self.assertEqual(h1, hash_text("+8801712345678"))
 
-    def test_phone_hash_is_stricter_than_phone_identity(self):
-        # Documented design: ContactPoint PHONE hash != PhoneIdentity.phone_hash
-        # for a country-code-prefixed number (canonical vs raw digits).
-        raw = normalize_phone("+8801712345678")  # '8801712345678'
-        self.assertNotEqual(hashing.hash_phone("+8801712345678"), hash_text(raw))
+    def test_phone_hash_joins_exactly_with_phone_identity(self):
+        # Post-unify: ContactPoint PHONE hash == PhoneIdentity.phone_hash for the
+        # same physical number — both derive from core.phone (E.164). No suffix
+        # assistance required.
+        pi = PhoneIdentity.objects.create(phone_number="+8801712345678")
+        self.assertEqual(hashing.hash_phone("+8801712345678"), pi.phone_hash)
+        self.assertEqual(hashing.hash_phone("01712345678"), pi.phone_hash)
 
     def test_phone_suffix_matches_phone_identity_suffix(self):
         pi = PhoneIdentity.objects.create(phone_number="+8801712345678")
@@ -57,7 +60,8 @@ class HashingTests(TestCase):
         )
 
     def test_mask_phone(self):
-        self.assertEqual(hashing.mask_phone("01712345678"), "*******5678")
+        # Canonical E.164 has 13 digits (+8801712345678) → 9 stars + last 4.
+        self.assertEqual(hashing.mask_phone("01712345678"), "*********5678")
         self.assertEqual(hashing.mask_phone(""), "")
 
 

@@ -157,6 +157,21 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_saved_addresses",
+            "description": (
+                "Return this customer's previously-used successful delivery "
+                "addresses (from orders that were actually delivered), resolved "
+                "across all their channels. Call this before asking a returning "
+                "customer for their shipping address so you can offer to reuse a "
+                "known one. Returns an empty list for first-time customers — in "
+                "that case just ask for the address normally."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 
@@ -171,6 +186,7 @@ def execute_tool(
     shop_id: str,
     psid: str,
     page_id: str,
+    channel: str = "FACEBOOK",
 ) -> dict:
     """
     Dispatch a tool call from the AI engine.
@@ -191,11 +207,13 @@ def execute_tool(
         elif tool_name == "get_invoice_payment_link":
             return _get_invoice_payment_link(shop_id=shop_id, page_id=page_id, psid=psid, **tool_args)
         elif tool_name == "confirm_order":
-            return _confirm_order(shop_id=shop_id, page_id=page_id, psid=psid, **tool_args)
+            return _confirm_order(shop_id=shop_id, page_id=page_id, psid=psid, channel=channel, **tool_args)
         elif tool_name == "search_faq":
             return _search_faq(shop_id=shop_id, **tool_args)
         elif tool_name == "get_older_messages":
             return _get_older_messages(shop_id=shop_id, psid=psid, **tool_args)
+        elif tool_name == "get_saved_addresses":
+            return _get_saved_addresses(shop_id=shop_id, channel=channel, channel_identity=psid)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as exc:  # noqa: BLE001
@@ -264,18 +282,24 @@ def _get_product_details(*, shop_id: str, product_id: str) -> dict:
 def _get_order_details(*, shop_id: str, psid: str, order_identifier: str) -> dict:
     from orders.models import Order
 
+    # SECURITY: every lookup is scoped to this channel actor (actor_reference ==
+    # the PSID/waid captured at checkout), NOT just shop_id. Scoping by shop
+    # alone leaks any customer's order to whoever is chatting. Without a PSID we
+    # cannot safely attribute an order to this customer, so we refuse.
+    if not psid:
+        return {"error": "Unable to identify this customer."}
+
+    base_qs = Order.objects.filter(
+        shop_id=shop_id, actor_reference=psid, deleted_at__isnull=True
+    )
+
     try:
         if order_identifier == "last":
-            order = (
-                Order.objects
-                .filter(shop_id=shop_id, deleted_at__isnull=True)
-                .order_by("-created_at")
-                .first()
-            )
+            order = base_qs.order_by("-created_at").first()
             if not order:
                 return {"error": "No orders found for this customer."}
         else:
-            order = Order.objects.get(id=order_identifier, shop_id=shop_id, deleted_at__isnull=True)
+            order = base_qs.get(id=order_identifier)
     except Order.DoesNotExist:
         return {"error": "Order not found."}
 
@@ -371,6 +395,7 @@ def _confirm_order(
     psid: str,
     shipping_address: dict,
     payment_method: str,
+    channel: str = "FACEBOOK",
 ) -> dict:
     draft = bot_state_get_order_draft(page_id=page_id, psid=psid)
     if not draft:
@@ -379,7 +404,6 @@ def _confirm_order(
     from orders.services.checkout import checkout_create_order
     from orders.services.transitions import order_transition
     from chat.services.bot_state import bot_state_clear_order_draft
-    from chat.models import ChannelChoices
     from fraud.services.risk import check_customer_risk
     from fraud.models import FraudConfig
     from shops.models import Shop
@@ -409,10 +433,12 @@ def _confirm_order(
             actor_reference=psid,
             # Identity graph: the chat path is the only place these signals are
             # captured (they were previously discarded after the risk check).
-            # channel_identity is the page-scoped PSID — a distinct value space
-            # from users.SocialAccount.provider_account_id.
+            # channel_identity is the channel-scoped endpoint id (Messenger PSID
+            # or WhatsApp waid) — a distinct value space per channel. `channel`
+            # is threaded from the inbound turn so a WhatsApp waid is never
+            # stored as a FACEBOOK psid (was hardcoded to FACEBOOK here).
             shipping_address=shipping_address,
-            channel=ChannelChoices.FACEBOOK,
+            channel=channel,
             channel_identity=psid,
         )
     except ValueError as exc:
@@ -506,3 +532,17 @@ def _get_older_messages(*, shop_id: str, psid: str, before_timestamp: int, limit
         before_timestamp=before_timestamp,
     )
     return {"messages": messages}
+
+
+def _get_saved_addresses(*, shop_id: str, channel: str, channel_identity: str) -> dict:
+    from identity.services.preload import preload_addresses_for_channel
+
+    addresses = preload_addresses_for_channel(
+        shop_id=shop_id, channel=channel, channel_identity=channel_identity
+    )
+    if not addresses:
+        return {
+            "addresses": [], 
+            "message": "No saved addresses found for this customer. Please ask them to provide their address."
+        }
+    return {"addresses": addresses}

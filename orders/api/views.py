@@ -162,6 +162,11 @@ class StorefrontCheckoutView(APIView):
         items = request.data.get("items", [])
         payment_method = request.data.get("payment_method", "COD")
         customer_profile_id = request.data.get("customer_profile_id")
+        # Identity capture: the web storefront carries a shipping_address (with a
+        # phone) but no channel (channel stays "" — this is web, not FB/WA). Pass
+        # it through so the order records a non-empty OrderIdentitySnapshot
+        # instead of the empty one web checkout used to write.
+        shipping_address = request.data.get("shipping_address")
 
         try:
             order = checkout_create_order(
@@ -170,6 +175,7 @@ class StorefrontCheckoutView(APIView):
                 customer_profile_id=customer_profile_id,
                 payment_method=payment_method,
                 actor_reference=request.META.get('REMOTE_ADDR'),
+                shipping_address=shipping_address,
             )
             return Response({
                 "id": order.id,
@@ -247,4 +253,22 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
             return Response(OrderDetailSerializer(order).data)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CustomerAddressPreloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["dashboard", "customers"],
+        summary="Preload previously successful delivery addresses for a customer by phone number",
+    )
+    def get(self, request):
+        phone = request.query_params.get('phone')
+        if not phone:
+            return Response({"detail": "Phone number is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from identity.services.preload import preload_addresses_for_phone
+        addresses = preload_addresses_for_phone(phone_number=phone)
+        
+        return Response({"addresses": addresses})
 

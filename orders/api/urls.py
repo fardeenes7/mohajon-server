@@ -7,6 +7,7 @@ from orders.api.views import (
     StorefrontCheckoutView,
     POSCheckoutView,
     OrderViewSet,
+    CustomerAddressPreloadView,
 )
 
 router = DefaultRouter()
@@ -35,6 +36,11 @@ dashboard_urlpatterns = [
         "pos/checkout/",
         POSCheckoutView.as_view(),
         name="pos-checkout",
+    ),
+    path(
+        "customers/addresses/preload/",
+        CustomerAddressPreloadView.as_view(),
+        name="dashboard-address-preload",
     ),
     path("", include(router.urls)),
 ]

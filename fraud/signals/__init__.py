@@ -13,6 +13,14 @@ def sync_fraud_to_global_pool(sender, instance, created, **kwargs):
     Only syncs if the shop has opted-in to pooling.
     """
     if created:
+        # Misuse protection (design doc Phase 4.3): a report only contributes to
+        # the cross-shop pool when it is backed by a genuine order between the
+        # reporting shop and the target (counts_toward_pool, set by
+        # fraud.services.misuse at creation). This is what stops a shop from
+        # poisoning an arbitrary phone's pool score to target a victim.
+        if not instance.counts_toward_pool:
+            return
+
         config, _ = FraudConfig.objects.get_or_create(shop=instance.shop)
         if not config.opt_in_pooling:
             return

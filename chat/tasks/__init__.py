@@ -41,9 +41,18 @@ def process_inbound_message(
     postback_payload: str | None = None,
     comment_data: dict | None = None,
     page_access_token: str,
+    channel: str = "FACEBOOK",
 ) -> None:
     """
-    Route a single inbound Messenger event.
+    Route a single inbound event.
+
+    `channel` is the ChannelChoices value the emitting adapter tagged the event
+    with (FACEBOOK / WHATSAPP / WEB_WIDGET). It is threaded down into the AI turn
+    so identity is stored against the correct value space — a WhatsApp waid must
+    never be persisted as a FACEBOOK psid. Adapters that omit it default to
+    FACEBOOK for backwards compatibility with legacy Messenger payloads.
+
+    For WhatsApp, `psid` is the waid and `page_id` is the phone_number_id.
 
     messaging_type:
       "message"  → greeting filter → AI engine
@@ -119,7 +128,7 @@ def process_inbound_message(
 
     reply = run_ai_turn(
         shop_id=shop_id,
-        channel="FACEBOOK",
+        channel=channel,
         channel_identity=psid,
         page_id=page_id,
         inbound_text=message_text,
@@ -127,6 +136,11 @@ def process_inbound_message(
         context_window_size=ctx_size,
         fallback_message=fallback,
     )
+    # TODO(WhatsApp inbound routing): send_text here is the Facebook Send API.
+    # When WhatsApp inbound is fully wired, route the reply through the channel
+    # adapter (chat.channels.registry.get_adapter(channel).send_text(...)) so a
+    # WHATSAPP turn replies via the WhatsApp Business API, not Messenger. Inbound
+    # identity persistence is already channel-correct via the `channel` param above.
     send_text(psid=psid, text=reply, token=page_access_token)
 
 

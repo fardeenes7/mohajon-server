@@ -30,8 +30,20 @@ class POSService:
         payments: [{method, amount}]
         """
         total_amount = sum(Decimal(str(i['quantity'])) * Decimal(str(i['unit_price'])) for i in items)
-        
+
         with transaction.atomic():
+            # Resolve the linked CustomerProfile (if any) up front so we can both
+            # attach it to the order and feed its phone/name into the identity
+            # snapshot below. A walk-in cash sale has no customer_id and so
+            # records no snapshot — there is no identity signal to capture.
+            customer_profile = None
+            if customer_id:
+                from shops.models import CustomerProfile
+
+                customer_profile = CustomerProfile.objects.filter(
+                    id=customer_id, tenant_id=self.shop.id
+                ).first()
+
             # 1. Create Order
             order = Order.objects.create(
                 shop=self.shop,
@@ -87,5 +99,29 @@ class POSService:
                         is_cleared=True, # Cash is already 'cleared'
                         cleared_at=timezone.now()
                     )
+
+            # 4. Identity graph: capture a snapshot when the sale is tied to a
+            # CustomerProfile. Compose a shipping_address-shaped dict from the
+            # profile's phone/name so the resolver mints the SAME canonical PHONE
+            # ContactPoint (via core.phone) that web/chat produce — a POS buyer
+            # and an online buyer on one number resolve to one Person. Walk-in
+            # cash sales (no profile) record nothing: there is no signal.
+            if customer_profile is not None and customer_profile.phone_number:
+                from identity.services.snapshot import create_order_identity_snapshot
+                from identity.tasks import resolve_order_identity_graph
+
+                create_order_identity_snapshot(
+                    order=order,
+                    shipping_address={
+                        "phone": customer_profile.phone_number,
+                        "name": customer_profile.name,
+                    },
+                    channel="",  # POS is not a messaging channel
+                    channel_identity="",
+                    payment_method=Order.PAYMENT_METHOD_COD,
+                )
+                transaction.on_commit(
+                    lambda: resolve_order_identity_graph.delay(str(order.id))
+                )
 
             return order
