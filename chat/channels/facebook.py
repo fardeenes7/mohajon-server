@@ -6,7 +6,7 @@ from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 
 from chat.channels.base import BaseChannelAdapter
 from webhooks.services import webhook_signature_valid
-from marketing.models import SocialConnection
+from marketing.selectors import get_connection_by_page_id
 from chat.channels.send_api import send_text
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,9 @@ class FacebookAdapter(BaseChannelAdapter):
             page_id = str(entry.get("id", ""))
 
             try:
-                conn = SocialConnection.objects.get(page_id=page_id, deleted_at__isnull=True)
+                conn = get_connection_by_page_id(page_id)
+                if not conn:
+                    raise Exception("No connection")
                 shop_id = str(conn.shop_id)
                 page_access_token = conn.access_token
             except Exception:
@@ -123,11 +125,9 @@ class FacebookAdapter(BaseChannelAdapter):
             raise ValueError(f"Could not resolve page_id for FACEBOOK {channel_identity}")
 
         try:
-            conn = SocialConnection.objects.get(
-                shop_id=shop_id,
-                page_id=page_id,
-                deleted_at__isnull=True,
-            )
+            conn = get_connection_by_page_id(page_id)
+            if not conn or str(conn.shop_id) != shop_id:
+                raise Exception("Not found or shop mismatch")
             token = conn.access_token
         except Exception as e:
             raise ValueError(f"Could not resolve credentials for FACEBOOK {channel_identity}: {e}")

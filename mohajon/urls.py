@@ -52,5 +52,6 @@ urlpatterns = [
     path('api/v1/analytics/', include('analytics.api.urls')),
     path('api/v1/affiliates/', include('affiliates.api.urls')),
     path('api/v1/fraud/', include('fraud.api.urls')),
+    path('api/v1/shipping/', include('shipping.api.urls')),
     path('api/v1/', include('users.api.urls')),
 ]

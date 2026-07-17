@@ -11,6 +11,10 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 
+import django.dispatch
+
+product_updated = django.dispatch.Signal()
+
 @receiver(post_save, sender="shops.Shop")
 def create_shop_tracking_config(sender, instance, created, **kwargs):
     """Auto-create a ShopTrackingConfig record when a new Shop is saved."""
@@ -42,18 +46,16 @@ def update_product_search_vector(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender="catalog.Product")
-def trigger_product_rag_indexing(sender, instance, **kwargs):
+def emit_product_updated(sender, instance, **kwargs):
     """
-    EPIC A-03: Enqueue an async task to generate semantic embeddings for RAG.
+    Emit product_updated signal when a product is saved.
     """
-    from chat.tasks.rag import embed_product_specs
-
     product_id = str(instance.pk)
 
-    def _enqueue():
-        embed_product_specs.delay(product_id=product_id)
+    def _emit():
+        product_updated.send(sender=sender, product_id=product_id)
 
-    transaction.on_commit(_enqueue)
+    transaction.on_commit(_emit)
 
 
 @receiver(post_save, sender="catalog.ProductVariant")

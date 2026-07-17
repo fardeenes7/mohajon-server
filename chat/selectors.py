@@ -3,6 +3,15 @@ from __future__ import annotations
 from typing import List, Dict, Any
 from chat.models import Conversation, ChatMessage
 
+def conversation_count_for_shop(shop_id: str) -> int:
+    return Conversation.objects.filter(shop_id=shop_id).count()
+
+def unread_inbox_count_for_shop(shop_id: str) -> int:
+    try:
+        return Conversation.objects.filter(shop_id=shop_id, has_unread=True).count()
+    except Exception:
+        return 0
+
 def conversation_list_for_shop(*, shop_id: str):
     return Conversation.objects.filter(
         shop_id=shop_id,
@@ -18,9 +27,9 @@ def message_list_for_psid(*, shop_id: str, psid: str, limit: int = 20, before_ti
     )
     if before_timestamp is not None:
         qs = qs.filter(timestamp__lt=before_timestamp)
-        
+
     messages = qs.order_by("-timestamp")[:limit]
-    
+
     # Needs to return a list of dicts with role and content for the engine
     results = []
     for msg in reversed(messages):
@@ -31,3 +40,4 @@ def message_list_for_psid(*, shop_id: str, psid: str, limit: int = 20, before_ti
             "timestamp": msg.timestamp,
         })
     return results
+

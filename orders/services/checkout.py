@@ -96,9 +96,15 @@ def checkout_create_order(
             
             try:
                 cp = CustomerProfile.objects.get(id=customer_profile_id)
+                from core.phone import normalize_phone_e164
+                from users.models import normalize_phone
+                raw_phone = cp.phone_number
+                canonical = normalize_phone_e164(raw_phone)
+                normalized_phone = canonical or normalize_phone(raw_phone)
+                
                 # Ensure a global PhoneIdentity exists for this customer
                 phone_identity, _ = PhoneIdentity.objects.get_or_create(
-                    phone_number=cp.phone_number,
+                    phone_number=normalized_phone,
                     defaults={"is_verified": False}
                 )
                 phone_identity_id = str(phone_identity.id)

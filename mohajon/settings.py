@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'users',
     'shops',
     'orders',
+    'shipping',
     'webhooks',
     'notifications',
     'compliance',

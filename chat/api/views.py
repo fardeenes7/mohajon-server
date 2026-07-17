@@ -36,7 +36,7 @@ from chat.selectors import conversation_list_for_shop, message_list_for_psid
 
 from webhooks.services import webhook_signature_valid
 from chat.tasks import process_inbound_message, embed_faq_entry
-from marketing.models import SocialConnection
+from marketing.selectors import get_connection_by_page_id
 from chat.services.bot_state import bot_state_set_human_active, bot_state_clear_human_active
 from chat.channels.send_api import send_text
 
@@ -54,12 +54,10 @@ def _get_shop_id(request) -> str:
 def _get_page_token(shop_id: str, page_id: str) -> str | None:
     """Fetch the Page Access Token for the given page from SocialConnection."""
     try:
-        conn = SocialConnection.objects.get(
-            shop_id=shop_id,
-            page_id=page_id,
-            deleted_at__isnull=True,
-        )
-        return conn.access_token
+        conn = get_connection_by_page_id(page_id)
+        if conn and str(conn.shop_id) == shop_id:
+            return conn.access_token
+        return None
     except Exception:
         return None
 

@@ -32,14 +32,21 @@ def get_or_create_contact_point(
     value_hash: str,
     value_suffix: str | None = None,
     display_value: str = "",
+    hash_version: int = 0,
 ) -> ContactPoint:
-    """Dedup a signal to a single global node by (point_type, value_hash)."""
+    """Dedup a signal to a single global node by (point_type, value_hash).
+
+    ``hash_version`` should be ``core.phone.HASH_VERSION`` for PHONE ContactPoints
+    so the version sentinel is correct for future re-hash operations. Non-phone
+    types carry no versioning semantics and should leave this at the default 0.
+    """
     contact_point, _created = ContactPoint.objects.get_or_create(
         point_type=point_type,
         value_hash=value_hash,
         defaults={
             "value_suffix": value_suffix,
             "display_value": display_value,
+            "hash_version": hash_version,
         },
     )
     return contact_point

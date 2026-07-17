@@ -54,7 +54,14 @@ def _successful_addresses_for_person(person: Person, *, limit: int) -> list[dict
     owns (phone / address / channel), so an address is surfaced regardless of
     which signal tied the order to them. Dedupes on address_hash so the same
     physical address used many times appears once.
+
+    DB-side LIMIT: we fetch at most ``limit * 10`` rows — a generous lookahead
+    window that is big enough to absorb duplicates/RTO rows while bounding
+    worst-case load for high-volume buyers. The Python dedup then trims to
+    ``limit`` unique addresses.
     """
+    # Only the snapshot's own fields are needed in the loop body; drop
+    # select_related("order") to avoid the join overhead.
     snapshots = (
         OrderIdentitySnapshot.objects.filter(
             order__status__in=_DELIVERED_STATUSES,
@@ -68,13 +75,19 @@ def _successful_addresses_for_person(person: Person, *, limit: int) -> list[dict
             | Q(address_contact_point__person=person)
             | Q(channel_contact_point__person=person)
         )
-        .select_related("order")
-        .order_by("-created_at")
+        .only(
+            "address_hash",
+            "display_address",
+            "display_name",
+            "display_phone",
+            "created_at",
+        )
+        .order_by("-created_at")[: limit * 10]  # DB-side cap; dedup trims to limit below
     )
 
     seen_hashes: set[str] = set()
     addresses: list[dict] = []
-    for snap in snapshots.iterator():
+    for snap in snapshots:
         if snap.address_hash in seen_hashes:
             continue
         seen_hashes.add(snap.address_hash)

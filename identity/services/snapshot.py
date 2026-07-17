@@ -8,6 +8,7 @@ graph later.
 
 from __future__ import annotations
 
+from core.phone import HASH_VERSION
 from identity.models import OrderIdentitySnapshot
 from identity.services import hashing
 
@@ -79,6 +80,10 @@ def create_order_identity_snapshot(
         order=order,
         raw_phone=raw_phone,
         phone_hash=phone_hash,
+        # Stamp the current hash version when a phone is present so this row is
+        # correctly identified as up-to-date during future re-hash operations.
+        # Rows with no phone carry no phone hash and correctly stay at 0.
+        hash_version=HASH_VERSION if phone_hash else 0,
         raw_address=raw_address,
         address_hash=address_hash,
         channel=channel or "",

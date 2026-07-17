@@ -58,8 +58,8 @@ def activate_subscription(shop: Shop, tier: str) -> ShopSubscription:
     ])
 
     if old_tier == ShopSubscription.TIER_FREE and tier != ShopSubscription.TIER_FREE:
-        from chat.tasks.rag import backfill_skipped_embeddings
-        backfill_skipped_embeddings.delay(shop_id=str(shop.id))
+        from billing.signals import subscription_upgraded
+        subscription_upgraded.send(sender=ShopSubscription, shop_id=str(shop.id))
 
     return sub
 

@@ -7,7 +7,7 @@ from django.db.models import Sum, Count, Q
 
 from orders.models import Order
 from catalog.models import ProductVariant
-from chat.models import Conversation
+from chat.selectors import unread_inbox_count_for_shop
 from shops.models import ShopSettings
 from shops.api.views import ShopDetailView
 
@@ -48,10 +48,7 @@ class DashboardMetricsView(APIView):
         # I'll default to 0 and attempt to count if there's a has_unread or unread_count field, else try to find unread ChatMessages.
         # Wait, since I haven't seen ChatMessage model fully, I'll count conversations.
         # Usually Conversation has an unread count. If it fails, I'll catch it.
-        try:
-            unread_inbox_count = Conversation.objects.filter(shop_id=shop_id, has_unread=True).count()
-        except Exception:
-            unread_inbox_count = 0
+        unread_inbox_count = unread_inbox_count_for_shop(shop_id)
 
         # 4. AI Credit Balance
         settings_obj = ShopSettings.objects.filter(shop_id=shop_id).first()

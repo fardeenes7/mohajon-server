@@ -75,11 +75,11 @@ def embed_product_specs(self, *, product_id: str) -> None:
 
     from billing.models import ShopSubscription
     from core.models import VectorStatus
+    from catalog.services import update_product_embedding
 
     if getattr(product.shop, "subscription", None) and product.shop.subscription.tier == ShopSubscription.TIER_FREE:
         logger.info("embed_product_specs: Skipped Product %s (Shop on Free plan)", product_id)
-        product.vector_status = VectorStatus.SKIPPED
-        product.save(update_fields=["vector_status", "updated_at"])
+        update_product_embedding(product_id=product_id, vector=None, status=VectorStatus.SKIPPED)
         return
 
     # Build semantic text representation
@@ -94,14 +94,11 @@ def embed_product_specs(self, *, product_id: str) -> None:
 
     try:
         vector = gateway.call_embedding(text=text)
-        product.embedding = vector
-        product.vector_status = VectorStatus.CREATED
-        product.save(update_fields=["embedding", "vector_status", "updated_at"])
+        update_product_embedding(product_id=product_id, vector=vector, status=VectorStatus.CREATED)
         logger.info("Embedded Product %s successfully.", product_id)
     except Exception as exc:
         logger.error("Embedding failed for Product %s: %s", product_id, exc)
-        product.vector_status = VectorStatus.FAILED
-        product.save(update_fields=["vector_status", "updated_at"])
+        update_product_embedding(product_id=product_id, vector=None, status=VectorStatus.FAILED)
         self.retry(exc=exc)
 
 

@@ -199,7 +199,7 @@ def execute_tool(
         elif tool_name == "get_product_details":
             return _get_product_details(shop_id=shop_id, **tool_args)
         elif tool_name == "get_order_details":
-            return _get_order_details(shop_id=shop_id, psid=psid, **tool_args)
+            return _get_order_details(shop_id=shop_id, psid=psid, channel=channel, **tool_args)
         elif tool_name == "prepare_order_draft":
             return _prepare_order_draft(shop_id=shop_id, page_id=page_id, psid=psid, **tool_args)
         elif tool_name == "get_available_payment_methods":
@@ -279,8 +279,9 @@ def _get_product_details(*, shop_id: str, product_id: str) -> dict:
     }
 
 
-def _get_order_details(*, shop_id: str, psid: str, order_identifier: str) -> dict:
-    from orders.models import Order
+def _get_order_details(*, shop_id: str, psid: str, order_identifier: str, channel: str = "FACEBOOK") -> dict:
+    from orders.selectors import order_list_for_customer
+    from identity.services.preload import _person_for_channel
 
     # SECURITY: every lookup is scoped to this channel actor (actor_reference ==
     # the PSID/waid captured at checkout), NOT just shop_id. Scoping by shop
@@ -289,18 +290,20 @@ def _get_order_details(*, shop_id: str, psid: str, order_identifier: str) -> dic
     if not psid:
         return {"error": "Unable to identify this customer."}
 
-    base_qs = Order.objects.filter(
-        shop_id=shop_id, actor_reference=psid, deleted_at__isnull=True
-    )
+    person = _person_for_channel(shop_id=shop_id, channel=channel, channel_identity=psid)
+    if not person:
+        return {"error": "Unable to identify this customer."}
+
+    base_qs = order_list_for_customer(customer_profile_id=str(person.id), shop_id=shop_id)
 
     try:
         if order_identifier == "last":
-            order = base_qs.order_by("-created_at").first()
+            order = base_qs.first()
             if not order:
                 return {"error": "No orders found for this customer."}
         else:
             order = base_qs.get(id=order_identifier)
-    except Order.DoesNotExist:
+    except Exception:
         return {"error": "Order not found."}
 
     return {
@@ -354,11 +357,11 @@ def _prepare_order_draft(
 
 
 def _get_available_payment_methods(*, shop_id: str) -> dict:
-    from shops.models import ShopSettings
-    try:
-        settings_obj = ShopSettings.objects.get(shop_id=shop_id, deleted_at__isnull=True)
+    from shops.selectors import get_shop_settings
+    settings_obj = get_shop_settings(shop_id)
+    if settings_obj:
         advance_fee = settings_obj.mandatory_advance_fee_bdt
-    except ShopSettings.DoesNotExist:
+    else:
         advance_fee = 0
 
     return {
@@ -373,14 +376,16 @@ def _get_invoice_payment_link(*, shop_id: str, page_id: str, psid: str, order_id
     if not draft:
         return {"error": "No active order draft.  Call prepare_order_draft first."}
 
-    from orders.models import Order
+    from orders.selectors import order_get_by_id
     from orders.services.invoices import payment_invoice_create
-    from shops.models import Shop
+    from shops.selectors import get_shop
 
     try:
-        order = Order.objects.get(id=order_id, shop_id=shop_id, deleted_at__isnull=True)
-        shop = Shop.objects.get(id=shop_id, deleted_at__isnull=True)
-    except (Order.DoesNotExist, Shop.DoesNotExist):
+        order = order_get_by_id(order_id=order_id, shop_id=shop_id)
+        shop = get_shop(shop_id)
+        if not shop:
+            return {"error": "Order or shop not found."}
+    except Exception:
         return {"error": "Order or shop not found."}
 
     invoice = payment_invoice_create(order=order)
@@ -405,8 +410,8 @@ def _confirm_order(
     from orders.services.transitions import order_transition
     from chat.services.bot_state import bot_state_clear_order_draft
     from fraud.services.risk import check_customer_risk
-    from fraud.models import FraudConfig
-    from shops.models import Shop
+    from fraud.selectors import get_fraud_config
+    from shops.selectors import get_shop
 
     items = [{
         "product_id": draft["product_id"],
@@ -415,15 +420,15 @@ def _confirm_order(
     }]
 
     # Check fraud risk
-    try:
-        shop = Shop.objects.get(id=shop_id)
-        risk = check_customer_risk(shop, shipping_address.get("phone"), actor_reference=psid)
-        fraud_config, _ = FraudConfig.objects.get_or_create(shop=shop)
-        
-        if risk["is_high_risk"] and fraud_config.block_high_risk:
-            return {"error": "This account or phone number is flagged for high risk. COD is currently disabled."}
-    except Shop.DoesNotExist:
+    shop = get_shop(shop_id)
+    if not shop:
         return {"error": "Shop not found."}
+        
+    risk = check_customer_risk(shop, shipping_address.get("phone"), actor_reference=psid)
+    fraud_config = get_fraud_config(shop_id)
+    
+    if risk["is_high_risk"] and fraud_config.block_high_risk:
+        return {"error": "This account or phone number is flagged for high risk. COD is currently disabled."}
 
     try:
         order = checkout_create_order(

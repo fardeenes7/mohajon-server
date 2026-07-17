@@ -87,10 +87,13 @@ def handle_comment_auto_reply(
     # Build product cards for the DM carousel (max 10)
     elements = []
     for product in products[:10]:
-        from shops.models import Shop
+        from shops.selectors import get_shop
         try:
-            shop = Shop.objects.get(id=shop_id)
-            storefront_url = f"https://{shop.subdomain}.mohajon.store/products/{product.slug}"
+            shop = get_shop(shop_id)
+            if shop:
+                storefront_url = f"https://{shop.subdomain}.mohajon.store/products/{product.slug}"
+            else:
+                storefront_url = "#"
         except Exception:
             storefront_url = "#"
 

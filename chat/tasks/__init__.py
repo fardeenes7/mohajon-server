@@ -60,11 +60,10 @@ def process_inbound_message(
       "comment"  → comment auto-reply pipeline
     """
     from chat.services.bot_state import bot_state_is_human_active
-    from shops.models import Shop, ShopSettings
+    from shops.selectors import get_shop, get_shop_settings
 
-    try:
-        shop = Shop.objects.get(id=shop_id, deleted_at__isnull=True)
-    except Shop.DoesNotExist:
+    shop = get_shop(shop_id)
+    if not shop:
         logger.error("process_inbound_message: shop %s not found", shop_id)
         return
 
@@ -78,10 +77,7 @@ def process_inbound_message(
         logger.info("Human active for psid=%s — bot is silenced.", psid)
         return
 
-    try:
-        settings_obj = shop.settings
-    except ShopSettings.DoesNotExist:
-        settings_obj = None
+    settings_obj = get_shop_settings(shop_id)
 
     # ── Comment auto-reply ──────────────────────────────────────────────────
     if messaging_type == "comment" and comment_data:

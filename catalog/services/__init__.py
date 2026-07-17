@@ -15,6 +15,7 @@ from catalog.services.product import (
     product_media_reorder,
 )
 from catalog.services.sku import generate_sku, ensure_unique_sku
+from catalog.services.embedding import update_product_embedding
 
 __all__ = [
     "category_create",
@@ -33,4 +34,5 @@ __all__ = [
     "product_media_reorder",
     "generate_sku",
     "ensure_unique_sku",
+    "update_product_embedding",
 ]

@@ -7,7 +7,6 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from shops.models import Shop, SubscriptionPlan
 import chat.services.engine
 from chat.services.bot_state import (
     bot_state_set_human_active,
@@ -76,8 +75,9 @@ class BotStateTakeoverTestCase(TestCase):
         self.r = get_redis_connection("default")
         self.r.flushall()
 
-        plan = SubscriptionPlan.objects.create(name="FREE")
-        self.shop = Shop.objects.create(id=uuid.uuid4(), name="Test Shop", subdomain="testshop", plan=plan)
+        from shops import models as shops_models
+        plan = shops_models.SubscriptionPlan.objects.create(name="FREE")
+        self.shop = shops_models.Shop.objects.create(id=uuid.uuid4(), name="Test Shop", subdomain="testshop", plan=plan)
 
     def tearDown(self):
         self.r.flushall()
@@ -144,23 +144,22 @@ class BotStateTakeoverTestCase(TestCase):
 class AgentSendViewTestCase(TestCase):
     def setUp(self):
         from rest_framework.test import APIClient
-        from shops.models import Shop, SubscriptionPlan
+        from shops import models as shops_models
         import uuid
         self.client = APIClient()
-        plan = SubscriptionPlan.objects.create(name="FREE")
-        self.shop = Shop.objects.create(id=uuid.uuid4(), name="Test Shop", subdomain="testshop", plan=plan)
+        plan = shops_models.SubscriptionPlan.objects.create(name="FREE")
+        self.shop = shops_models.Shop.objects.create(id=uuid.uuid4(), name="Test Shop", subdomain="testshop", plan=plan)
         
         # We need a user to authenticate
         from users.models import User
         self.user = User.objects.create_user(email="test@test.com", password="password")
         self.client.force_authenticate(user=self.user)
         
-        from shops.models import ShopMember
-        ShopMember.objects.create(shop=self.shop, user=self.user, role="OWNER")
+        shops_models.ShopMember.objects.create(shop=self.shop, user=self.user, role="OWNER")
         
         # We also need a SocialConnection to provide page token
-        from marketing.models import SocialConnection
-        SocialConnection.objects.create(
+        from marketing import models as marketing_models
+        marketing_models.SocialConnection.objects.create(
             shop=self.shop,
             tenant_id=self.shop.id,
             provider="FACEBOOK",
@@ -169,7 +168,7 @@ class AgentSendViewTestCase(TestCase):
         )
         self.url = "/api/v1/chat/send/"
 
-    @patch("chat.api.views.send_text")
+    @patch("chat.channels.facebook.FacebookAdapter.send_text")
     def test_agent_send_creates_message_and_conversation(self, mock_send_text):
         mock_send_text.return_value = {"message_id": "mid.test1234"}
         
@@ -196,3 +195,224 @@ class AgentSendViewTestCase(TestCase):
         msg = ChatMessage.objects.get(conversation=conv)
         self.assertEqual(msg.direction, MessageDirection.OUTBOUND)
         self.assertEqual(msg.text, "Hello from agent!")
+import json
+import uuid
+import time
+from unittest.mock import patch
+from django.test import TestCase, override_settings
+from django.urls import reverse
+from rest_framework import status
+from rest_framework.test import APIClient
+
+from shops.models import Shop, SubscriptionPlan, ShopSettings
+from fraud.models.config import FraudConfig
+from chat.services.tools import (
+    _get_available_payment_methods,
+    _get_invoice_payment_link,
+    _confirm_order,
+    _get_order_details,
+)
+from chat.services.bot_state import bot_state_set_order_draft
+from catalog.models import Product
+from orders.models import Order, OrderStatus
+from identity.models import Person, ChannelActor, OrderIdentitySnapshot
+from django_redis import get_redis_connection
+import hmac
+from hashlib import sha256
+
+
+class ChatToolsTestCase(TestCase):
+    def setUp(self):
+        self.r = get_redis_connection("default")
+        self.r.flushall()
+        
+        plan = SubscriptionPlan.objects.create(name="FREE")
+        self.shop = Shop.objects.create(id=uuid.uuid4(), name="Test Shop", subdomain="testshop", plan=plan)
+        
+        # Selectors use ShopSettings and FraudConfig
+        self.shop_settings = ShopSettings.objects.create(
+            shop=self.shop, 
+            tenant_id=self.shop.id,
+            mandatory_advance_fee_bdt=50
+        )
+        self.fraud_config = FraudConfig.objects.create(
+            shop=self.shop,
+            tenant_id=self.shop.id,
+            block_high_risk=True
+        )
+        
+        self.page_id = "test_page"
+        self.psid = "test_psid"
+
+    def tearDown(self):
+        self.r.flushall()
+
+    def test_get_available_payment_methods(self):
+        res = _get_available_payment_methods(shop_id=str(self.shop.id))
+        self.assertIn("COD", res.get("methods", []))
+        self.assertEqual(res.get("advance_delivery_fee_bdt"), 50)
+
+    @patch("orders.services.invoices.payment_invoice_create")
+    def test_get_invoice_payment_link(self, mock_create_invoice):
+        # Requires a draft order
+        bot_state_set_order_draft(page_id=self.page_id, psid=self.psid, draft={"quantity": 1})
+        
+        order = Order.objects.create(
+            shop=self.shop,
+            tenant_id=self.shop.id,
+            status=OrderStatus.AWAITING_PAYMENT,
+            total_amount=100.0,
+            currency="BDT"
+        )
+        
+        class MockInvoice:
+            token = "inv_123"
+        mock_create_invoice.return_value = MockInvoice()
+        
+        res = _get_invoice_payment_link(
+            shop_id=str(self.shop.id),
+            page_id=self.page_id,
+            psid=self.psid,
+            order_id=str(order.id)
+        )
+        self.assertEqual(res.get("payment_url"), f"https://{self.shop.subdomain}.mohajon.store/pay/inv_123")
+
+    @patch("fraud.services.risk.check_customer_risk")
+    @patch("orders.services.checkout.checkout_create_order")
+    @patch("orders.services.transitions.order_transition")
+    def test_confirm_order(self, mock_transition, mock_create, mock_risk):
+        # We must exercise real FraudConfig selector, but we can mock risk to trigger it
+        mock_risk.return_value = {"is_high_risk": True}
+        
+        bot_state_set_order_draft(page_id=self.page_id, psid=self.psid, draft={
+            "product_id": str(uuid.uuid4()),
+            "quantity": 1
+        })
+        
+        # Because block_high_risk=True in FraudConfig and is_high_risk=True, this should error
+        res = _confirm_order(
+            shop_id=str(self.shop.id),
+            page_id=self.page_id,
+            psid=self.psid,
+            shipping_address={"name": "Test", "phone": "01700000000", "address_line": "Test"},
+            payment_method="COD"
+        )
+        self.assertIn("flagged for high risk", res.get("error", ""))
+        
+        # Test success path
+        mock_risk.return_value = {"is_high_risk": False}
+        class MockOrder:
+            id = uuid.uuid4()
+            status = "CONFIRMED"
+            total_amount = 100.0
+        mock_create.return_value = MockOrder()
+        
+        res2 = _confirm_order(
+            shop_id=str(self.shop.id),
+            page_id=self.page_id,
+            psid=self.psid,
+            shipping_address={"name": "Test", "phone": "01700000000", "address_line": "Test"},
+            payment_method="COD"
+        )
+        self.assertEqual(res2.get("status"), "CONFIRMED")
+        self.assertEqual(res2.get("payment_method"), "COD")
+
+    def test_get_order_details(self):
+        # Real identity and order lookup.
+        # Person is a global (non-tenant) model: use display_name, no tenant_id.
+        from identity.models import ContactPoint, ContactPointType, OrderIdentitySnapshot
+        from identity.services.hashing import hash_channel_identity
+
+        person = Person.objects.create(display_name="Test Person")
+
+        # Create a ContactPoint for the PSID and link it to the Person.
+        psid_hash = hash_channel_identity(self.psid)
+        psid_cp = ContactPoint.objects.create(
+            point_type=ContactPointType.FACEBOOK,
+            value_hash=psid_hash,
+            display_value=self.psid,
+            person=person,
+        )
+
+        ChannelActor.objects.create(
+            shop=self.shop,
+            tenant_id=self.shop.id,
+            channel="FACEBOOK",
+            channel_identity=self.psid,
+            person=person,
+        )
+
+        # order_list_for_customer resolves orders via OrderIdentitySnapshot →
+        # ContactPoint → Person. The Order.customer_profile_id FK points to
+        # shops_customerprofile, NOT identity.Person — do not pass it here.
+        order = Order.objects.create(
+            shop=self.shop,
+            tenant_id=self.shop.id,
+            status=OrderStatus.CONFIRMED,
+            total_amount=200.0,
+            currency="BDT",
+        )
+
+        # Wire the snapshot so the selector can find this order via the Person.
+        OrderIdentitySnapshot.objects.create(
+            order=order,
+            channel="FACEBOOK",
+            channel_identity=self.psid,
+            channel_contact_point=psid_cp,
+        )
+
+        res = _get_order_details(
+            shop_id=str(self.shop.id),
+            psid=self.psid,
+            order_identifier="last",
+        )
+
+        self.assertEqual(res.get("id"), str(order.id))
+        self.assertEqual(res.get("total_amount"), "200.00")
+
+
+class ChatRAGSignalsTestCase(TestCase):
+    def setUp(self):
+        plan = SubscriptionPlan.objects.create(name="FREE")
+        self.shop = Shop.objects.create(id=uuid.uuid4(), name="Test Shop", subdomain="testshop", plan=plan)
+
+    @patch("chat.tasks.rag.embed_product_specs.delay")
+    def test_product_updated_signal(self, mock_embed):
+        # Saving a product should fire catalog's product_updated signal,
+        # which should be caught by chat's signal receiver and call embed_product_specs.delay.
+        # total_stock is a computed @property (sum of variant stocks), not a DB field —
+        # pass only actual model fields to objects.create().
+        product = Product.objects.create(
+            shop=self.shop,
+            tenant_id=self.shop.id,
+            name="Test Product",
+            base_price=10.0,
+        )
+        # Because emit_product_updated is wrapped in transaction.on_commit we call
+        # the signal directly so it fires inside the TestCase's non-committed transaction.
+        from catalog.signals import product_updated
+        product_updated.send(sender=Product, product_id=str(product.id))
+
+        mock_embed.assert_called_with(product_id=str(product.id))
+
+    @patch("chat.tasks.rag.backfill_skipped_embeddings.delay")
+    def test_subscription_upgraded_signal(self, mock_backfill):
+        from billing.signals import subscription_upgraded
+        subscription_upgraded.send(sender=Shop, shop_id=str(self.shop.id))
+        mock_backfill.assert_called_with(shop_id=str(self.shop.id))
+
+    def test_embed_product_specs_service(self):
+        # Confirm update_product_embedding writes the vector + status to the DB.
+        # total_stock is a computed @property — do not pass it to objects.create().
+        product = Product.objects.create(
+            shop=self.shop,
+            tenant_id=self.shop.id,
+            name="Test Product",
+            base_price=10.0,
+        )
+        from catalog.services import update_product_embedding
+
+        update_product_embedding(product_id=str(product.id), vector=[0.1]*1536, status="CREATED")
+        product.refresh_from_db()
+        self.assertEqual(product.vector_status, "CREATED")
+        self.assertIsNotNone(product.embedding)

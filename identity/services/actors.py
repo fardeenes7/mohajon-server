@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from django.utils import timezone
 
-from core.phone import hash_phone, mask_phone, phone_suffix
+from core.phone import HASH_VERSION, hash_phone, mask_phone, phone_suffix
 from identity.models import (
     ChannelActor,
     ChannelActorChannel,
@@ -45,6 +45,9 @@ def _mint_whatsapp_phone_cp(waid: str) -> ContactPoint | None:
         value_hash=value_hash,
         value_suffix=phone_suffix(waid),
         display_value=mask_phone(waid),
+        # waid is a phone number — stamp the current version so this PHONE
+        # ContactPoint is identifiable as up-to-date in future re-hash sweeps.
+        hash_version=HASH_VERSION,
     )
 
 

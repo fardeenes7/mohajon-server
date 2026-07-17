@@ -3,14 +3,13 @@ from __future__ import annotations
 from django.db import transaction
 
 from compliance.audit import audit_event_create
-from orders.models import (
+from orders.models import OrderStatus
+from shipping.models import (
     CourierConsignment,
     CourierConsignmentStatus,
     CourierProvider,
-    Order,
-    OrderStatus,
 )
-from orders.services.transitions import order_transition
+from shipping.registry import courier_registry
 
 
 COURIER_TO_ORDER_STATUS: dict[str, str] = {
@@ -21,9 +20,10 @@ COURIER_TO_ORDER_STATUS: dict[str, str] = {
 }
 
 
-def courier_consignment_upsert(
+def create_consignment(
     *,
-    order: Order,
+    order_id: str,
+    shop_id: str,
     provider: str,
     external_consignment_id: str,
     status: str,
@@ -34,8 +34,8 @@ def courier_consignment_upsert(
         provider=provider,
         external_consignment_id=external_consignment_id,
         defaults={
-            "order": order,
-            "shop": order.shop,
+            "order_id": order_id,
+            "shop_id": shop_id,
             "status": status,
             "tracking_code": tracking_code,
             "payload": payload or {},
@@ -44,7 +44,12 @@ def courier_consignment_upsert(
     return consignment
 
 
-def courier_apply_status_from_webhook(
+def get_consignment_status(order_id: str) -> str | None:
+    consignment = CourierConsignment.objects.filter(order_id=order_id).order_by('-created_at').first()
+    return consignment.status if consignment else None
+
+
+def apply_status_from_webhook(
     *,
     payload: dict,
     provider: str | None = None,
@@ -52,7 +57,6 @@ def courier_apply_status_from_webhook(
 ) -> CourierConsignment:
     provider = str(provider or payload.get("provider") or CourierProvider.OTHER).upper()
     
-    from orders.services.courier_registry import courier_registry
     courier_impl = courier_registry.get_provider(provider)
     
     if courier_impl:
@@ -76,10 +80,17 @@ def courier_apply_status_from_webhook(
     if status not in {choice.value for choice in CourierConsignmentStatus}:
         raise ValueError(f"Unsupported courier status: {status}")
 
+    # To maintain decoupling, shipping doesn't directly import Order objects.
+    # It queries orders.selectors for needed metadata.
+    from orders.selectors.orders import get_order_shop_id
+    shop_id = get_order_shop_id(order_id=order_id)
+    if not shop_id:
+        raise ValueError(f"Could not find valid order for ID {order_id}")
+
     with transaction.atomic():
-        order = Order.objects.select_for_update().get(id=order_id, deleted_at__isnull=True)
-        consignment = courier_consignment_upsert(
-            order=order,
+        consignment = create_consignment(
+            order_id=order_id,
+            shop_id=shop_id,
             provider=provider,
             external_consignment_id=external_consignment_id,
             status=status,
@@ -88,47 +99,37 @@ def courier_apply_status_from_webhook(
         )
 
         target_status = COURIER_TO_ORDER_STATUS.get(status)
-        if target_status and target_status != order.status:
-            try:
-                order_transition(
-                    order=order,
-                    to_status=target_status,
-                    actor_user_id=actor_user_id,
-                    actor_role="MANAGER",
-                    reason=f"Courier webhook status update: {status}",
-                )
-            except ValueError:
-                order_transition(
-                    order=order,
-                    to_status=OrderStatus.ON_HOLD,
-                    actor_user_id=actor_user_id,
-                    actor_role="MANAGER",
-                    reason=f"Courier webhook inconsistent transition from {order.status} with event {status}",
-                )
+        if target_status:
+            from orders.services.transitions import update_order_status_from_courier
+            update_order_status_from_courier(
+                order_id=order_id,
+                new_status=target_status,
+                meta={"actor_user_id": actor_user_id, "reason": f"Courier webhook status update: {status}"}
+            )
 
         audit_event_create(
-            shop_id=str(order.shop_id),
+            shop_id=str(shop_id),
             actor_user_id=actor_user_id,
             action="COURIER_WEBHOOK_APPLIED",
-            resource_type="orders.CourierConsignment",
+            resource_type="shipping.CourierConsignment",
             resource_id=str(consignment.id),
             metadata={
-                "order_id": str(order.id),
+                "order_id": order_id,
                 "provider": provider,
                 "consignment_id": external_consignment_id,
                 "status": status,
             },
         )
         
-        # Phase 5: Ingest courier delivery-success-rate feed if present.
+        # Ingest courier delivery-success-rate feed if present.
         if success_rate is not None:
-            from identity.services.behavioral import _terminal_person_for_order, ingest_courier_success_rate
-            person = _terminal_person_for_order(order)
-            if person:
+            from orders.selectors.orders import get_order_terminal_person_id
+            from identity.services.behavioral import ingest_courier_success_rate
+            person_id = get_order_terminal_person_id(order_id)
+            if person_id:
                 try:
-                    ingest_courier_success_rate(person_id=str(person.id), rate=float(success_rate))
+                    ingest_courier_success_rate(person_id=str(person_id), rate=float(success_rate))
                 except (ValueError, TypeError):
                     pass
 
         return consignment
-

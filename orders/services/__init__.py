@@ -1,8 +1,5 @@
 from orders.services.checkout import checkout_create_order
-from orders.services.courier import (
-    courier_apply_status_from_webhook,
-    courier_consignment_upsert,
-)
+
 from orders.services.invoices import (
     PaymentInvoiceGoneError,
     PaymentInvoiceNotFoundError,
@@ -25,8 +22,7 @@ from orders.services.transitions import order_transition
 
 __all__ = [
     'checkout_create_order',
-    'courier_consignment_upsert',
-    'courier_apply_status_from_webhook',
+
     'order_transition',
     'payment_invoice_assert_active',
     'payment_invoice_create',

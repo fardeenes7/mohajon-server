@@ -128,3 +128,27 @@ def order_transition(
                 to_status,
             )
     return order
+
+
+def update_order_status_from_courier(*, order_id: str, new_status: str, meta: dict) -> None:
+    """The only way shipping is allowed to mutate an Order."""
+    order = Order.objects.get(id=order_id, deleted_at__isnull=True)
+    actor_user_id = meta.get("actor_user_id")
+    reason = meta.get("reason") or f"Courier webhook status update: {new_status}"
+    
+    try:
+        order_transition(
+            order=order,
+            to_status=new_status,
+            actor_user_id=actor_user_id,
+            actor_role="MANAGER",
+            reason=reason,
+        )
+    except ValueError:
+        order_transition(
+            order=order,
+            to_status=OrderStatus.ON_HOLD,
+            actor_user_id=actor_user_id,
+            actor_role="MANAGER",
+            reason=f"Courier webhook inconsistent transition from {order.status} with event {new_status}",
+        )

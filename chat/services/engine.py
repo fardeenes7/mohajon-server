@@ -42,13 +42,13 @@ _MAX_TOOL_CALLS = 5
 # ---------------------------------------------------------------------------
 
 def _build_system_prompt(*, shop_id: str) -> str:
-    from shops.models import Shop, ShopSettings
+    from shops.selectors import get_shop
 
-    try:
-        shop = Shop.objects.get(id=shop_id, deleted_at__isnull=True)
+    shop = get_shop(shop_id)
+    if shop:
         shop_name = shop.name
         currency = shop.base_currency
-    except Shop.DoesNotExist:
+    else:
         shop_name = "Our Shop"
         currency = "BDT"
 

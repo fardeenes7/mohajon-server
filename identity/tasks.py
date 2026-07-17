@@ -5,6 +5,13 @@ Triggered explicitly (transaction.on_commit) from orders.services.checkout, NOT
 via a post_save signal — the existing fraud/signals post_save pattern is the
 anti-pattern this design deliberately avoids (it fires on every save and is
 hard to reason about). One idempotent task per order.
+
+Tasks
+-----
+resolve_order_identity_graph  — main pipeline, one per order.
+repair_profile_person_link    — targeted repair for a failed shops-side link
+                                that cannot be retried inside the main task
+                                (resolved_at guard prevents it).
 """
 
 from __future__ import annotations
@@ -16,6 +23,32 @@ from django.db import transaction
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+def repair_profile_person_link(customer_profile_id: str, person_id: str) -> dict:
+    """
+    Idempotent repair for a CustomerProfile↔Person link that failed inside
+    resolve_order_identity_graph.
+
+    The main task cannot be retried for this (resolved_at guard turns it into a
+    no-op), so this dedicated task provides a separate retry path with
+    exponential back-off. It is safe to call multiple times: the underlying
+    service uses a scoped UPDATE that is a no-op when the profile is already
+    correctly linked.
+    """
+    from shops.services import link_profile_to_person
+
+    updated = link_profile_to_person(
+        customer_profile_id=customer_profile_id,
+        person_id=person_id,
+    )
+    return {
+        "status": "linked" if updated else "already_linked",
+        "customer_profile_id": customer_profile_id,
+        "person_id": person_id,
+    }
+
 
 
 @shared_task
@@ -36,6 +69,7 @@ def resolve_order_identity_graph(order_id: str) -> dict:
         OrderIdentitySnapshot,
     )
     from identity.services import hashing, resolution
+    from core.phone import HASH_VERSION
 
     try:
         snapshot = OrderIdentitySnapshot.objects.select_related("order").get(order_id=order_id)
@@ -58,6 +92,9 @@ def resolve_order_identity_graph(order_id: str) -> dict:
                 value_hash=snapshot.phone_hash,
                 value_suffix=hashing.phone_suffix(snapshot.raw_phone),
                 display_value=snapshot.display_phone,
+                # Stamp the current HASH_VERSION so this node is identifiable
+                # as up-to-date during any future re-hash sweep.
+                hash_version=HASH_VERSION,
             )
 
         if snapshot.address_hash:
@@ -115,7 +152,10 @@ def resolve_order_identity_graph(order_id: str) -> dict:
         #    global Person. Cross-app write goes through shops.services by UUID
         #    (never importing shops models here) to preserve the app seam. A
         #    shops-side failure must not roll back identity resolution, so it is
-        #    isolated in its own savepoint and swallowed.
+        #    isolated in its own savepoint and swallowed. On failure we schedule
+        #    a repair task so the link is never permanently orphaned — a retry of
+        #    the main task is a no-op (resolved_at guard), so the repair must be
+        #    a separate path.
         if customer_profile_id and person is not None:
             try:
                 with transaction.atomic():
@@ -127,10 +167,17 @@ def resolve_order_identity_graph(order_id: str) -> dict:
                     )
             except Exception:  # noqa: BLE001
                 logger.exception(
-                    "link_profile_to_person failed for order %s (profile=%s person=%s)",
+                    "link_profile_to_person failed for order %s (profile=%s person=%s) — "
+                    "scheduling repair task",
                     order_id,
                     customer_profile_id,
                     person.id,
+                )
+                # Repair task runs after the outer transaction commits (5 s delay
+                # lets the DB settle). It is idempotent and safe to retry.
+                repair_profile_person_link.apply_async(
+                    args=[str(customer_profile_id), str(person.id)],
+                    countdown=5,
                 )
 
         # 7. Record the neutral "order placed" FACT for the resolved Person
