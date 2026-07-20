@@ -16,15 +16,46 @@ class DummyCourierAdapter(CourierInterface):
     @property
     def provider_code(self) -> str:
         return "DUMMY"
-        
+
     def parse_webhook_payload(self, payload: dict) -> dict:
         return {
             "external_consignment_id": str(payload.get("id")),
             "order_id": str(payload.get("order_id")),
-            "status": CourierConsignmentStatus.DELIVERED if payload.get("status") == "success" else CourierConsignmentStatus.CANCELLED,
+            "status": CourierConsignmentStatus.DELIVERED if payload.get("status") == "success" else CourierConsignmentStatus.FAILED,
             "tracking_code": payload.get("tracking_code", ""),
             "success_rate": payload.get("success_rate"),
         }
+
+    def create_consignment(self, shop_id: str, order: dict) -> dict:
+        return {
+            "external_consignment_id": "DUMMY-CN-1",
+            "tracking_code": "DUMMY-CN-1",
+            "status": CourierConsignmentStatus.CREATED,
+            "payload": {},
+        }
+
+    def calculate_price(self, shop_id: str, price_request: dict) -> dict:
+        return {"price": 60}
+
+    def list_cities(self, shop_id: str) -> list[dict]:
+        return [{"id": 1, "name": "Dhaka"}]
+
+    def list_zones(self, shop_id: str, city_id: int) -> list[dict]:
+        return [{"id": 1, "name": "Zone 1"}]
+
+    def list_areas(self, shop_id: str, zone_id: int) -> list[dict]:
+        return [{"id": 1, "name": "Area 1"}]
+
+    def get_tracking(self, shop_id: str, external_consignment_id: str) -> dict:
+        return {
+            "status": CourierConsignmentStatus.IN_TRANSIT,
+            "tracking_code": external_consignment_id,
+            "payload": {},
+        }
+
+    def verify_webhook_signature(self, shop_id, signature, body) -> bool:
+        from webhooks.services import webhook_signature_valid
+        return webhook_signature_valid(signature=signature, body=body)
 
 class CourierWebhookTestCase(TestCase):
     def setUp(self):
@@ -119,9 +150,131 @@ class CourierWebhookTestCase(TestCase):
         )
         
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        
+
         # Verify nothing was updated
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, OrderStatus.IN_TRANSIT)
-        
+
         mock_ingest.assert_not_called()
+
+
+class PathaoAdapterTestCase(TestCase):
+    def setUp(self):
+        from shipping.couriers.pathao.adapter import PathaoCourier
+        self.adapter = PathaoCourier()
+
+    def test_provider_code(self):
+        self.assertEqual(self.adapter.provider_code, "PATHAO")
+
+    def test_registered_in_registry(self):
+        # Populated by ShippingConfig.ready() at app load.
+        self.assertIsNotNone(courier_registry.get_provider("PATHAO"))
+
+    def test_parse_webhook_maps_status_slug(self):
+        parsed = self.adapter.parse_webhook_payload({
+            "consignment_id": "DA123",
+            "merchant_order_id": "ORDER-9",
+            "status": "Delivered",
+            "status_slug": "delivered",
+        })
+        self.assertEqual(parsed["external_consignment_id"], "DA123")
+        self.assertEqual(parsed["order_id"], "ORDER-9")
+        self.assertEqual(parsed["status"], CourierConsignmentStatus.DELIVERED)
+
+    def test_parse_webhook_unknown_slug_is_blank(self):
+        parsed = self.adapter.parse_webhook_payload({
+            "consignment_id": "DA123",
+            "merchant_order_id": "ORDER-9",
+            "status_slug": "some_new_status",
+        })
+        self.assertEqual(parsed["status"], "")
+
+    def test_create_consignment_translates_dto(self):
+        from unittest.mock import MagicMock
+        fake_client = MagicMock()
+        fake_client.store_id = "STORE-1"
+        fake_client.create_order.return_value = {"data": {"consignment_id": "DA999"}}
+
+        with patch.object(self.adapter, "_client", return_value=fake_client):
+            result = self.adapter.create_consignment("shop-1", {
+                "order_id": "o1",
+                "merchant_order_id": "o1",
+                "recipient_name": "Karim",
+                "recipient_phone": "+8801700000000",
+                "recipient_address": "123 Road, Dhaka",
+                "amount_to_collect": 500,
+                "item_quantity": 2,
+                "item_weight": 1.0,
+            })
+
+        self.assertEqual(result["external_consignment_id"], "DA999")
+        self.assertEqual(result["status"], CourierConsignmentStatus.CREATED)
+        sent = fake_client.create_order.call_args.args[0]
+        self.assertEqual(sent["store_id"], "STORE-1")
+        self.assertEqual(sent["amount_to_collect"], 500)
+        self.assertEqual(sent["delivery_type"], 48)
+
+    def test_create_consignment_requires_store_id(self):
+        from unittest.mock import MagicMock
+        from shipping.couriers.pathao.client import PathaoError
+        fake_client = MagicMock()
+        fake_client.store_id = ""
+        with patch.object(self.adapter, "_client", return_value=fake_client):
+            with self.assertRaises(PathaoError):
+                self.adapter.create_consignment("shop-1", {"order_id": "o1"})
+
+
+class PathaoClientTokenTestCase(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        from shipping.couriers.pathao.client import PathaoClient
+        self.client = PathaoClient(
+            shop_id="shop-token",
+            credentials={
+                "client_id": "cid",
+                "client_secret": "secret",
+                "username": "u@x.com",
+                "password": "pw",
+            },
+            is_test_mode=True,
+        )
+
+    def test_get_access_token_caches_and_reuses(self):
+        with patch.object(
+            self.client, "_issue_token",
+            return_value={"access_token": "AT1", "expires_in": 4320, "refresh_token": "RT1"},
+        ) as mock_issue:
+            first = self.client.get_access_token()
+            second = self.client.get_access_token()
+
+        self.assertEqual(first, "AT1")
+        self.assertEqual(second, "AT1")
+        mock_issue.assert_called_once()  # second call served from cache
+
+    def test_sandbox_base_url(self):
+        self.assertIn("sandbox", self.client.base_url)
+
+
+class CourierCredentialsServiceTestCase(TestCase):
+    def setUp(self):
+        plan = SubscriptionPlan.objects.create(name="FREE")
+        self.shop = Shop.objects.create(name="Cred Shop", subdomain="credshop", plan=plan)
+
+    def test_set_and_get_credentials_roundtrip(self):
+        from shipping.services import set_courier_credentials, get_courier_credentials
+        set_courier_credentials(
+            shop_id=str(self.shop.id),
+            provider="PATHAO",
+            credentials={"client_id": "abc", "client_secret": "xyz"},
+            is_test_mode=True,
+            default_store_id="STORE-7",
+        )
+        creds = get_courier_credentials(shop_id=str(self.shop.id), provider="PATHAO")
+        self.assertEqual(creds["client_id"], "abc")
+
+    def test_get_credentials_missing_returns_none(self):
+        from shipping.services import get_courier_credentials
+        self.assertIsNone(
+            get_courier_credentials(shop_id=str(self.shop.id), provider="PATHAO")
+        )

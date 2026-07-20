@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework import status
 
+from shipping.registry import courier_registry
 from shipping.services import apply_status_from_webhook
 from webhooks.models import WebhookLog, WebhookProvider, WebhookProcessingStatus
 from webhooks.services import webhook_signature_valid
@@ -18,15 +19,25 @@ class CourierWebhookView(APIView):
     def post(self, request, provider_code=None, *args, **kwargs):
         provider_code = provider_code or request.data.get("provider")
 
-        # Signature check similar to chat FacebookAdapter
         signature = request.META.get("HTTP_X_HUB_SIGNATURE_256", "")
-        if not webhook_signature_valid(signature=signature, body=request.body):
+
+        # Prefer the provider's own signature scheme (per-shop secret) when the
+        # provider is registered; fall back to the platform-wide check otherwise.
+        courier_impl = courier_registry.get_provider(provider_code) if provider_code else None
+        if courier_impl is not None:
+            valid = courier_impl.verify_webhook_signature(
+                shop_id=None, signature=signature, body=request.body
+            )
+        else:
+            valid = webhook_signature_valid(signature=signature, body=request.body)
+
+        if not valid:
             logger.warning("Courier webhook: invalid signature.")
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-        
+
         payload = request.data
         external_id = str(payload.get("consignment_id") or payload.get("id") or "")
-        
+
         # Deduplication / Logging
         webhook_log = WebhookLog.objects.create(
             provider=WebhookProvider.COURIER,

@@ -1,9 +1,13 @@
 from django.db import transaction
 from django.db.models import F
 from rest_framework import generics, status
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from accounting.services.purchase_order import POService
+from catalog.models import ProductVariant
 
 from accounting.api.serializers import (
     AdminPayoutActionSerializer, 
@@ -179,5 +183,37 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         shop_id = ShopDetailView()._resolve_shop_id(self.request)
         serializer.save(shop_id=shop_id, tenant_id=shop_id)
+
+    @action(detail=True, methods=['post'])
+    def receive(self, request, pk=None):
+        """Finalize a PO: ingest stock, update COGS, record the expense ledger entry."""
+        shop_id = ShopDetailView()._resolve_shop_id(request)
+        po = self.get_object()
+        if po.status == PurchaseOrder.STATUS_CANCELLED:
+            return Response(
+                {'detail': 'A cancelled purchase order cannot be received.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            po = POService(shop_id).mark_as_received(str(po.id))
+        except ProductVariant.DoesNotExist:
+            return Response(
+                {'detail': 'One or more line-item variants no longer exist.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(PurchaseOrderSerializer(po).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel a PO. Only DRAFT/ORDERED orders can be cancelled."""
+        po = self.get_object()
+        if po.status not in (PurchaseOrder.STATUS_DRAFT, PurchaseOrder.STATUS_ORDERED):
+            return Response(
+                {'detail': f'A {po.status.lower()} purchase order cannot be cancelled.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        po.status = PurchaseOrder.STATUS_CANCELLED
+        po.save(update_fields=['status'])
+        return Response(PurchaseOrderSerializer(po).data, status=status.HTTP_200_OK)
 
 

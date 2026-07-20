@@ -1,5 +1,6 @@
+from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
-from rest_framework import status
+from rest_framework import filters, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -218,7 +219,10 @@ class POSCheckoutView(APIView):
 
 class OrderViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
-    
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ['status']
+    search_fields = ['customer_profile__name', 'customer_profile__phone_number']
+
     def get_queryset(self):
         shop_id = ShopDetailView()._resolve_shop_id(self.request)
         return Order.objects.filter(shop_id=shop_id).select_related('customer_profile').order_by('-created_at')
