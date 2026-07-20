@@ -278,3 +278,163 @@ class CourierCredentialsServiceTestCase(TestCase):
         self.assertIsNone(
             get_courier_credentials(shop_id=str(self.shop.id), provider="PATHAO")
         )
+
+
+class CourierAPITestCase(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        import uuid
+        from users.models import User
+        from shops.models import ShopMember
+        
+        self.client = APIClient()
+        plan = SubscriptionPlan.objects.create(name="FREE")
+        self.shop = Shop.objects.create(id=uuid.uuid4(), name="Test API Shop", subdomain="apishop", plan=plan)
+        
+        self.user = User.objects.create_user(email="apiuser@test.com", password="password")
+        ShopMember.objects.create(shop=self.shop, user=self.user, role="OWNER")
+        
+        self.client.force_authenticate(user=self.user)
+        self.headers = {"HTTP_X_TENANT_ID": str(self.shop.id)}
+
+    def test_configure_courier_account(self):
+        payload = {
+            "provider": "PATHAO",
+            "credentials": {"client_id": "abc", "client_secret": "xyz"},
+            "is_test_mode": True,
+            "label": "Pathao Account",
+            "default_store_id": "STORE-123"
+        }
+        response = self.client.post(
+            "/api/v1/shipping/accounts/configure/",
+            payload,
+            format="json",
+            **self.headers
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["label"], "Pathao Account")
+        self.assertEqual(response.json()["default_store_id"], "STORE-123")
+        self.assertEqual(response.json()["credentials"]["client_id"], "********")
+
+    def test_list_courier_accounts(self):
+        from shipping.services import set_courier_credentials
+        set_courier_credentials(
+            shop_id=str(self.shop.id),
+            provider="PATHAO",
+            credentials={"client_id": "abc", "client_secret": "xyz"},
+            is_test_mode=True,
+            default_store_id="STORE-7",
+            label="My Pathao",
+        )
+        response = self.client.get("/api/v1/shipping/accounts/", **self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 1)
+        self.assertEqual(response.json()[0]["label"], "My Pathao")
+
+    @patch("shipping.api.views.get_courier_locations")
+    def test_list_locations(self, mock_get_locs):
+        mock_get_locs.return_value = [{"id": 1, "name": "Dhaka"}]
+        response = self.client.get(
+            "/api/v1/shipping/locations/",
+            {"provider": "PATHAO", "city_id": 123},
+            **self.headers
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [{"id": 1, "name": "Dhaka"}])
+        mock_get_locs.assert_called_once_with(
+            shop_id=str(self.shop.id),
+            provider="PATHAO",
+            city_id=123,
+            zone_id=None
+        )
+
+    @patch("shipping.api.views.estimate_shipping_price")
+    def test_estimate_price(self, mock_est):
+        mock_est.return_value = {"price": 120}
+        payload = {
+            "provider": "PATHAO",
+            "price_request": {"item_weight": 1.5, "recipient_city": 1}
+        }
+        response = self.client.post(
+            "/api/v1/shipping/estimate-price/",
+            payload,
+            format="json",
+            **self.headers
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"price": 120})
+        mock_est.assert_called_once_with(
+            shop_id=str(self.shop.id),
+            provider="PATHAO",
+            price_request={"item_weight": 1.5, "recipient_city": 1}
+        )
+
+    @patch("shipping.api.views.create_shipment")
+    def test_create_consignment(self, mock_create_shipment):
+        import uuid
+        from orders.models import Order
+        from users.models import PhoneIdentity
+        phone = PhoneIdentity.objects.create(phone_number="+8801711111111")
+        order = Order.objects.create(shop=self.shop, tenant_id=self.shop.id, phone_identity=phone)
+        
+        consignment = CourierConsignment.objects.create(
+            id=uuid.uuid4(),
+            order=order,
+            shop=self.shop,
+            provider="PATHAO",
+            external_consignment_id="EXT123",
+            tracking_code="TRK123",
+            status=CourierConsignmentStatus.CREATED
+        )
+        mock_create_shipment.return_value = consignment
+
+        payload = {
+            "order_id": str(order.id),
+            "provider": "PATHAO"
+        }
+        response = self.client.post(
+            "/api/v1/shipping/consignments/create/",
+            payload,
+            format="json",
+            **self.headers
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["external_consignment_id"], "EXT123")
+        mock_create_shipment.assert_called_once_with(
+            order_id=str(order.id),
+            provider="PATHAO",
+            actor_user_id=str(self.user.id)
+        )
+
+    @patch("shipping.api.views.get_shipment_tracking")
+    def test_tracking_consignment(self, mock_track):
+        import uuid
+        from orders.models import Order
+        from users.models import PhoneIdentity
+        phone = PhoneIdentity.objects.create(phone_number="+8801711111111")
+        order = Order.objects.create(shop=self.shop, tenant_id=self.shop.id, phone_identity=phone)
+        
+        consignment = CourierConsignment.objects.create(
+            id=uuid.uuid4(),
+            order=order,
+            shop=self.shop,
+            provider="PATHAO",
+            external_consignment_id="EXT123",
+            tracking_code="TRK123",
+            status=CourierConsignmentStatus.CREATED
+        )
+        mock_track.return_value = {
+            "status": CourierConsignmentStatus.IN_TRANSIT,
+            "tracking_code": "EXT123",
+            "payload": {}
+        }
+        
+        response = self.client.get(
+            f"/api/v1/shipping/consignments/{consignment.id}/tracking/",
+            **self.headers
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], CourierConsignmentStatus.IN_TRANSIT)
+        mock_track.assert_called_once_with(order_id=str(order.id))
+
+

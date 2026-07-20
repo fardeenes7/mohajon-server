@@ -91,6 +91,7 @@ class OrderListSerializer(serializers.ModelSerializer):
 class OrderDetailSerializer(serializers.ModelSerializer):
     customer = CustomerShortSerializer(source="customer_profile", read_only=True)
     items = PaymentInvoiceOrderItemSerializer(many=True, read_only=True)
+    consignments = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -106,9 +107,16 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "shipping_address",
             "billing_address",
             "items",
+            "consignments",
             "created_at",
             "updated_at",
         ]
+
+    def get_consignments(self, obj):
+        from shipping.models import CourierConsignment
+        from shipping.api.serializers import CourierConsignmentSerializer
+        consignments = CourierConsignment.objects.filter(order=obj)
+        return CourierConsignmentSerializer(consignments, many=True).data
 
 
 class OrderStatusTransitionSerializer(serializers.Serializer):
