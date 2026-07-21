@@ -119,7 +119,7 @@ services:
             dockerfile: Dockerfile
             target: dev
         platform: linux/amd64
-        command: celery -A mohajon worker -l info -Q default,high_priority,media_processing --concurrency 2
+        command: celery -A mohajon worker -l info -Q default,high_priority,media_processing,messenger --concurrency 2
         volumes:
             - .:/app
         environment:

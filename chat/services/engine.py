@@ -121,7 +121,7 @@ def _persist_message(
                 shop_id, channel, channel_identity, exc,
             )
 
-    ChatMessage.objects.create(
+    message = ChatMessage.objects.create(
         shop_id=shop_id,
         tenant_id=shop_id,
         conversation=conversation,
@@ -130,6 +130,74 @@ def _persist_message(
         attachment_payload=attachment_payload,
         timestamp=timestamp,
     )
+
+    # Bump updated_at on every message so the inbox sorts by real last-activity
+    # and the sidebar shows the latest time. A queryset .update() bypasses the
+    # auto_now field, so we must set it explicitly. Only inbound messages create
+    # unread work for agents; use an atomic F() update to avoid a read-modify-write
+    # race between concurrent turns.
+    from django.db.models import F
+    from django.utils import timezone
+    update_fields = {"updated_at": timezone.now()}
+    if direction == MessageDirection.INBOUND:
+        update_fields["has_unread"] = True
+        update_fields["unread_count"] = F("unread_count") + 1
+    Conversation.objects.filter(pk=conversation.pk).update(**update_fields)
+    conversation.refresh_from_db(fields=["has_unread", "unread_count", "updated_at"])
+
+    # Push the new message + conversation summary to the shop's agent dashboards.
+    from chat.services.realtime import publish_new_message, publish_conversation_update
+    publish_new_message(shop_id=shop_id, message=message)
+    publish_conversation_update(shop_id=shop_id, conversation=conversation)
+
+    # Resolve the Messenger user's profile name off the hot path so the inbox
+    # shows a real name instead of the raw PSID. Deduplicated per (page, psid) in
+    # the profile service, so calling on every FB message is a cheap no-op after
+    # the first. Best-effort: the conversation is already usable without it.
+    if channel == "FACEBOOK" and page_id:
+        from chat.services.profile import queue_display_name_sync
+        queue_display_name_sync(shop_id=str(shop_id), page_id=page_id, psid=channel_identity)
+
+    return message
+
+
+def record_system_event(
+    *,
+    shop_id: str,
+    channel: str,
+    channel_identity: str,
+    event: str,
+    text: str,
+    page_id: str | None = None,
+) -> None:
+    """
+    Record a non-conversational timeline event (human takeover, handback, bot
+    auto-paused, …) as a SYSTEM message and push it live to agent dashboards.
+
+    Persisted so the marker survives a refresh; `event` is a stable machine key
+    (e.g. "human_takeover") the UI can use to pick an icon, `text` is the human
+    label. SYSTEM messages are never delivered to the customer.
+    """
+    from chat.models import Conversation, ChatMessage, MessageDirection
+    import time
+
+    conversation, _ = Conversation.objects.get_or_create(
+        shop_id=shop_id, tenant_id=shop_id,
+        channel=channel, channel_identity=channel_identity,
+    )
+    if page_id and conversation.metadata.get("page_id") != page_id:
+        conversation.metadata["page_id"] = page_id
+        conversation.save(update_fields=["metadata"])
+
+    message = ChatMessage.objects.create(
+        shop_id=shop_id, tenant_id=shop_id, conversation=conversation,
+        direction=MessageDirection.SYSTEM,
+        text=text, attachment_payload={"event": event},
+        timestamp=int(time.time() * 1000),
+    )
+
+    from chat.services.realtime import publish_new_message
+    publish_new_message(shop_id=shop_id, message=message)
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +242,7 @@ def run_ai_turn(
     if ctx_messages is None:
         # Cold path — load from Postgres and warm the cache
         db_messages = message_list_for_psid(
-            shop_id=shop_id, psid=channel_identity, limit=context_window_size
+            shop_id=shop_id, psid=channel_identity, channel=channel, limit=context_window_size
         )
         ctx_cache_populate(page_id=page_id or channel, psid=channel_identity, messages=db_messages, max_size=context_window_size)
         ctx_messages = db_messages
@@ -187,10 +255,28 @@ def run_ai_turn(
         openai_messages.append({"role": m["role"], "content": m["content"]})
     openai_messages.append({"role": "user", "content": inbound_text})
 
+    _DEFAULT_FALLBACK = "I'm having a little trouble right now. Our team will reach out shortly! 🙏"
+
+    def _persist_fallback() -> str:
+        """Persist the fallback reply so it appears in the agent inbox, then return it."""
+        reply = fallback_message or _DEFAULT_FALLBACK
+        _persist_message(
+            shop_id=shop_id, channel=channel, channel_identity=channel_identity,
+            direction=MessageDirection.OUTBOUND,
+            text=reply, timestamp=int(time.time() * 1000), page_id=page_id,
+        )
+        return reply
+
     # 3. Credit pre-check
     if not has_sufficient_ai_credits(shop_id=shop_id):
         _handle_credit_exhaustion(shop_id=shop_id, page_id=page_id or channel, psid=channel_identity)
-        return fallback_message or "I'm having a little trouble right now. Our team will reach out shortly! 🙏"
+        record_system_event(
+            shop_id=shop_id, channel=channel, channel_identity=channel_identity,
+            event="bot_paused_credits",
+            text="Bot paused — AI credits exhausted. A human should take over.",
+            page_id=page_id,
+        )
+        return _persist_fallback()
 
     # 4. OpenAI tool-call loop — all AI concerns routed through AIGateway
     gateway = AIGateway(shop_id=shop_id, reference_id=channel_identity)
@@ -249,7 +335,7 @@ def run_ai_turn(
     except Exception as exc:
         logger.error("AI engine error shop=%s identity=%s: %s", shop_id, channel_identity, exc)
         _push_dlq_alert(shop_id=shop_id, reason=str(exc))
-        return fallback_message or "I'm having a little trouble right now. Our team will reach out shortly! 🙏"
+        return _persist_fallback()
 
     # 5. Deduct credits + write audit log via gateway (single consolidated entry)
     try:

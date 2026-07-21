@@ -46,6 +46,21 @@ def upsert_social_connection(
             "last_error": "",
         },
     )
+
+    # Notify receivers (chat) so the page gets subscribed to Messenger webhooks
+    # and its Messenger profile configured. Fire after commit so the connection
+    # row (and its token) is durable before any Graph call reads it.
+    from marketing.signals import page_connected
+
+    def _emit():
+        page_connected.send(
+            sender=SocialConnection,
+            shop_id=str(shop_id),
+            page_id=str(page_id),
+            connection_id=str(connection.id),
+        )
+
+    transaction.on_commit(_emit)
     return connection
 
 

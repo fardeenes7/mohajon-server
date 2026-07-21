@@ -72,15 +72,30 @@ def process_inbound_message(
         logger.debug("Loop protection: sender == page, dropping.")
         return
 
-    # Human takeover silence
+    # Human takeover silence — persist the inbound message so agents see it,
+    # but do NOT invoke the bot. This is the same as the explicit HUMAN-only
+    # mode path below; the difference is this is per-conversation, not global.
     if bot_state_is_human_active(page_id=page_id, psid=psid):
-        logger.info("Human active for psid=%s — bot is silenced.", psid)
+        logger.info("Human active for psid=%s — persisting inbound, bot silenced.", psid)
+        if message_text:
+            from chat.services.engine import _persist_message
+            from chat.models import MessageDirection
+            _persist_message(
+                shop_id=shop_id, channel=channel, channel_identity=psid,
+                direction=MessageDirection.INBOUND,
+                text=message_text, timestamp=timestamp, page_id=page_id,
+            )
         return
 
     settings_obj = get_shop_settings(shop_id)
 
+    from chat.constants import bot_autoresponds
+
     # ── Comment auto-reply ──────────────────────────────────────────────────
     if messaging_type == "comment" and comment_data:
+        if not bot_autoresponds():
+            logger.info("HUMAN-only mode — skipping comment auto-reply for shop=%s", shop_id)
+            return
         from chat.services.comment_autoreply import handle_comment_auto_reply
         handle_comment_auto_reply(
             shop_id=shop_id,
@@ -95,6 +110,9 @@ def process_inbound_message(
 
     # ── Deterministic postbacks ─────────────────────────────────────────────
     if messaging_type == "postback" and postback_payload:
+        if not bot_autoresponds():
+            logger.info("HUMAN-only mode — skipping postback handler for shop=%s", shop_id)
+            return
         _handle_postback(
             shop_id=shop_id,
             page_id=page_id,
@@ -102,6 +120,7 @@ def process_inbound_message(
             payload=postback_payload,
             page_access_token=page_access_token,
             settings_obj=settings_obj,
+            channel=channel,
         )
         return
 
@@ -109,12 +128,44 @@ def process_inbound_message(
     if not message_text:
         return
 
+    # HUMAN-only mode: persist the inbound message (which bumps unread + pushes a
+    # real-time event to agents) but do NOT invoke greeting/AI. Humans reply from
+    # the inbox.
+    if not bot_autoresponds():
+        from chat.services.engine import _persist_message
+        from chat.models import MessageDirection
+        _persist_message(
+            shop_id=shop_id, channel=channel, channel_identity=psid,
+            direction=MessageDirection.INBOUND,
+            text=message_text, timestamp=timestamp, page_id=page_id,
+        )
+        return
+
     from chat.services.greeting import is_greeting, greeting_reply_text
-    from chat.services.send_api import send_text
+    from chat.channels.registry import get_adapter
+    from chat.services.engine import _persist_message
+    from chat.models import MessageDirection
 
     greeting_keywords = getattr(settings_obj, "messenger_greeting_keywords", None) if settings_obj else None
     if is_greeting(message_text=message_text, keywords=greeting_keywords):
-        send_text(psid=psid, text=greeting_reply_text(), token=page_access_token)
+        reply_text = greeting_reply_text()
+        # Persist inbound greeting so it appears in the agent inbox history.
+        _persist_message(
+            shop_id=shop_id, channel=channel, channel_identity=psid,
+            direction=MessageDirection.INBOUND,
+            text=message_text, timestamp=timestamp, page_id=page_id,
+        )
+        get_adapter(channel).send_text(
+            shop_id=shop_id, channel_identity=psid,
+            text=reply_text, page_id=page_id,
+        )
+        # Persist the outbound greeting reply so agents see the full thread.
+        out_ts = int(time.time() * 1000)
+        _persist_message(
+            shop_id=shop_id, channel=channel, channel_identity=psid,
+            direction=MessageDirection.OUTBOUND,
+            text=reply_text, timestamp=out_ts, page_id=page_id,
+        )
         return
 
     # AI engine turn
@@ -132,12 +183,12 @@ def process_inbound_message(
         context_window_size=ctx_size,
         fallback_message=fallback,
     )
-    # TODO(WhatsApp inbound routing): send_text here is the Facebook Send API.
-    # When WhatsApp inbound is fully wired, route the reply through the channel
-    # adapter (chat.channels.registry.get_adapter(channel).send_text(...)) so a
-    # WHATSAPP turn replies via the WhatsApp Business API, not Messenger. Inbound
-    # identity persistence is already channel-correct via the `channel` param above.
-    send_text(psid=psid, text=reply, token=page_access_token)
+    # Route the reply through the channel adapter so a WHATSAPP turn replies via
+    # the WhatsApp Business API and a FACEBOOK turn via Messenger. Inbound identity
+    # persistence is already channel-correct via the `channel` param above.
+    get_adapter(channel).send_text(
+        shop_id=shop_id, channel_identity=psid, text=reply, page_id=page_id,
+    )
 
 
 def _handle_postback(
@@ -148,31 +199,133 @@ def _handle_postback(
     payload: str,
     page_access_token: str,
     settings_obj,
+    channel: str = "FACEBOOK",
 ) -> None:
     """Handle deterministic Persistent Menu / Ice Breaker postbacks."""
-    from chat.services.send_api import send_text
+    from chat.channels.registry import get_adapter
     from chat.services.bot_state import bot_state_set_human_active
+
+    adapter = get_adapter(channel)
+
+    def _send(text: str) -> None:
+        adapter.send_text(shop_id=shop_id, channel_identity=psid, text=text, page_id=page_id)
 
     if payload in ("ICE_SUPPORT", "HUMAN_SUPPORT"):
         ttl = getattr(settings_obj, "messenger_human_takeover_ttl_minutes", 30) if settings_obj else 30
         bot_state_set_human_active(page_id=page_id, psid=psid, ttl_minutes=ttl)
-        send_text(
-            psid=psid,
-            text="You've been connected with our support team. We'll be with you shortly! 👤",
-            token=page_access_token,
-        )
+        _send("You've been connected with our support team. We'll be with you shortly! 👤")
     elif payload == "TRACK_ORDER":
-        send_text(psid=psid, text="Please share your order ID and I'll track it for you! 📦", token=page_access_token)
+        _send("Please share your order ID and I'll track it for you! 📦")
     elif payload == "FAQ_MENU":
-        send_text(psid=psid, text="Sure! What would you like to know? You can ask about returns, shipping, or any other topic.", token=page_access_token)
+        _send("Sure! What would you like to know? You can ask about returns, shipping, or any other topic.")
     elif payload == "ICE_BROWSE":
-        send_text(psid=psid, text="What are you looking for? Type a product name and I'll find the best options for you! 🛍", token=page_access_token)
+        _send("What are you looking for? Type a product name and I'll find the best options for you! 🛍")
     elif payload == "ICE_TRACK":
-        send_text(psid=psid, text="Share your order ID and I'll check the status for you! 📦", token=page_access_token)
+        _send("Share your order ID and I'll check the status for you! 📦")
     elif payload == "ICE_FAQ":
-        send_text(psid=psid, text="What would you like to know? Ask me about returns, shipping, or anything else!", token=page_access_token)
+        _send("What would you like to know? Ask me about returns, shipping, or anything else!")
     else:
         logger.info("Unhandled postback payload: %s for shop=%s", payload, shop_id)
+
+
+# ---------------------------------------------------------------------------
+# Messenger page onboarding — subscribe page to webhooks + configure profile
+# ---------------------------------------------------------------------------
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=10,
+    queue="messenger",
+    name="chat.tasks.onboard_messenger_page",
+)
+def onboard_messenger_page(self, *, shop_id: str, page_id: str) -> None:
+    """
+    Wire a freshly-connected Facebook Page for Messenger:
+      1. Subscribe the app to the page's webhook events (else Meta delivers nothing).
+      2. Configure the Messenger profile (Get Started, Ice Breakers, Persistent Menu)
+         so the deterministic ICE_*/GET_STARTED postbacks can fire.
+
+    The page access token is resolved from the SocialConnection rather than passed
+    through the signal, so tokens never travel through the event payload.
+    """
+    from marketing.selectors import get_connection_by_page_id
+    from chat.services.send_api import subscribe_page_to_webhooks, configure_messenger_profile
+    from shops.selectors import get_shop
+
+    conn = get_connection_by_page_id(page_id)
+    if not conn or str(conn.shop_id) != str(shop_id):
+        logger.warning("onboard_messenger_page: no connection for page=%s shop=%s", page_id, shop_id)
+        return
+
+    token = conn.access_token
+    if not token:
+        logger.warning("onboard_messenger_page: connection for page=%s has no token", page_id)
+        return
+
+    try:
+        subscribe_page_to_webhooks(page_id=page_id, token=token)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("onboard_messenger_page: subscribe failed page=%s: %s", page_id, exc)
+        raise self.retry(exc=exc)
+
+    # Profile config is best-effort — a failure here must not undo the subscription
+    # (which is the part that unblocks inbound), so it is not retried.
+    try:
+        shop = get_shop(shop_id)
+        shop_url = f"https://{shop.subdomain}.mohajon.store" if shop else "https://mohajon.store"
+        configure_messenger_profile(token=token, shop_url=shop_url)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("onboard_messenger_page: profile config failed page=%s: %s", page_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Messenger user profile-name resolution
+# ---------------------------------------------------------------------------
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=15,
+    queue="messenger",
+    name="chat.tasks.fetch_conversation_display_name",
+)
+def fetch_conversation_display_name(self, *, shop_id: str, page_id: str, psid: str) -> None:
+    """
+    Resolve a Messenger user's display name via the Graph User Profile API and
+    store it on every FACEBOOK Conversation for this (shop, psid), then re-publish
+    a conversation update so open inboxes swap the raw PSID for the real name live.
+
+    Keyed on (shop_id, page_id, psid) — NOT a conversation id — so it is the common
+    resolver for both the DM path and the comment-autoreply path, which share a PSID
+    per page. If no conversation exists yet (comment-only user), the name is still
+    fetched to prime the Redis guard; it lands on the conversation the moment one is
+    created. Best-effort: any failure just leaves the PSID showing.
+    """
+    from chat.models import Conversation, ChannelChoices
+    from chat.services.send_api import fetch_user_profile_name
+    from marketing.selectors import get_connection_by_page_id
+
+    conn = get_connection_by_page_id(page_id)
+    if not conn or str(conn.shop_id) != str(shop_id) or not conn.access_token:
+        logger.info("display-name: no usable connection for page=%s", page_id)
+        return
+
+    name = fetch_user_profile_name(psid=psid, token=conn.access_token)
+    if not name:
+        return
+
+    from chat.services.realtime import publish_conversation_update
+    conversations = Conversation.objects.filter(
+        shop_id=shop_id, channel=ChannelChoices.FACEBOOK,
+        channel_identity=psid, deleted_at__isnull=True,
+    )
+    for conversation in conversations:
+        if conversation.metadata.get("name") == name:
+            continue
+        conversation.metadata["name"] = name
+        conversation.save(update_fields=["metadata"])
+        publish_conversation_update(shop_id=shop_id, conversation=conversation)
 
 
 # ---------------------------------------------------------------------------

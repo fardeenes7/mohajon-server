@@ -14,6 +14,9 @@ class ChannelChoices(models.TextChoices):
 class MessageDirection(models.TextChoices):
     INBOUND = "INBOUND", "Inbound"
     OUTBOUND = "OUTBOUND", "Outbound"
+    # Non-conversational timeline events (takeover, handback, bot paused, …).
+    # Rendered as inline markers in the agent inbox, never sent to the customer.
+    SYSTEM = "SYSTEM", "System"
 
 class FAQCategory(models.TextChoices):
     FAQ = "FAQ", "FAQ"
@@ -45,6 +48,12 @@ class Conversation(TenantModel):
         blank=True,
         related_name="conversations",
     )
+    # Read-state for the agent inbox. Bumped on inbound persist, reset when an
+    # agent opens the conversation. has_unread is denormalised from unread_count
+    # so the inbox list can filter/index without a computed expression.
+    has_unread = models.BooleanField(default=False, db_index=True)
+    unread_count = models.PositiveIntegerField(default=0)
+    last_read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         indexes = [
@@ -151,7 +160,7 @@ class WhatsAppConfig(TenantModel):
     )
     phone_number_id = models.CharField(max_length=255, db_index=True)
     waba_id = models.CharField(max_length=255)
-    access_token = models.CharField(max_length=255)
+    access_token = models.TextField()
     is_active = models.BooleanField(default=True, db_index=True)
 
     def __str__(self) -> str:

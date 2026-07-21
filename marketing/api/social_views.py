@@ -67,7 +67,7 @@ class SocialOAuthStartView(ShopScopedAPIView):
                 "client_id": app_id,
                 "redirect_uri": redirect_uri,
                 "state": state,
-                "scope": "pages_manage_posts,pages_read_engagement,pages_show_list,ads_management,ads_read,business_management",
+                "scope": "pages_manage_posts,pages_read_engagement,pages_show_list,pages_messaging,pages_manage_metadata,ads_management,ads_read,business_management",
                 "response_type": "code",
             }
         )

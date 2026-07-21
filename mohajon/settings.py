@@ -32,6 +32,9 @@ WEB_URL = env('WEB_URL', default='http://localhost:3000')
 
 # Application definition
 INSTALLED_APPS = [
+    # Must precede django.contrib.staticfiles so its ASGI-aware runserver
+    # replaces Django's default WSGI-only one — otherwise /ws/ routes 404 in dev.
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -42,6 +45,7 @@ INSTALLED_APPS = [
     'django.contrib.postgres',
     
     # Third party
+    'channels',
     'rest_framework',
     'rest_framework.authtoken',
     'rest_framework_simplejwt',
@@ -117,6 +121,19 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'mohajon.wsgi.application'
+ASGI_APPLICATION = 'mohajon.asgi.application'
+
+# Django Channels — Redis channel layer shared by the ASGI process (WebSocket
+# consumers) and the Celery workers (which publish message events). Reusing the
+# existing REDIS_URL so no new infra is required.
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [env("REDIS_URL", default="redis://localhost:6379/0")],
+        },
+    },
+}
 
 import sys
 IS_TESTING = 'test' in sys.argv

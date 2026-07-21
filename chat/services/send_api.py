@@ -173,12 +173,55 @@ def send_receipt_template(
     })
 
 
+def fetch_user_profile_name(*, psid: str, token: str) -> str | None:
+    """
+    Look up a Messenger user's display name via the Graph User Profile API
+    (GET /{psid}?fields=first_name,last_name). Requires the page access token and
+    an active messaging thread with the user. Returns None on any failure so the
+    caller can fall back to the raw PSID — a missing name must never break intake.
+    """
+    url = f"https://graph.facebook.com/{_GRAPH_API_VERSION}/{psid}"
+    try:
+        resp = requests.get(
+            url,
+            params={"fields": "first_name,last_name", "access_token": token},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return None
+    name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
+    return name or None
+
+
 def reply_to_comment(*, comment_id: str, message: str, token: str) -> dict:
     """Post a public reply to a Facebook post comment via Graph API."""
     url = f"https://graph.facebook.com/{_GRAPH_API_VERSION}/{comment_id}/comments"
     resp = requests.post(url, params={"access_token": token}, json={"message": message}, timeout=10)
     resp.raise_for_status()
     return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Page webhook subscription
+# ---------------------------------------------------------------------------
+
+# Fields the FacebookAdapter.parse_webhook_payload actually handles today:
+# `messages`/`messaging_postbacks` (Messenger DMs + postbacks) and `feed`
+# (post comments → comment auto-reply). Requested with the page access token.
+_SUBSCRIBED_FIELDS = "messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads,feed"
+
+
+def subscribe_page_to_webhooks(*, page_id: str, token: str, fields: str = _SUBSCRIBED_FIELDS) -> dict:
+    """
+    Subscribe the app to a Page's webhook events (POST /{page_id}/subscribed_apps).
+    Without this, Meta never delivers Messenger/feed events to our webhook even
+    when the OAuth connection and page token are valid. Requires the page access
+    token and the `pages_manage_metadata` scope.
+    """
+    url = f"https://graph.facebook.com/{_GRAPH_API_VERSION}/{page_id}/subscribed_apps"
+    return _post(url, token=token, payload={"subscribed_fields": fields})
 
 
 # ---------------------------------------------------------------------------

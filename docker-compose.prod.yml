@@ -164,7 +164,7 @@ services:
             context: .
             dockerfile: Dockerfile
             target: prod
-        command: celery -A mohajon worker -l info -Q default,high_priority,media_processing --concurrency 4
+        command: celery -A mohajon worker -l info -Q default,high_priority,media_processing,messenger --concurrency 4
         restart: unless-stopped
         environment:
             DEBUG: "False"

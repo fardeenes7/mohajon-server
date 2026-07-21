@@ -85,6 +85,31 @@ def bot_state_is_human_active(*, page_id: str, psid: str) -> bool:
     return True
 
 
+def bot_state_human_active_map(pairs: list[tuple[str, str]]) -> dict[tuple[str, str], bool]:
+    """
+    Batched human-active check for the inbox list — one Redis round-trip for many
+    (page_id, psid) pairs instead of a query per conversation. Expiry is honored
+    read-only here (no write-back) to keep the list render side-effect free.
+    """
+    if not pairs:
+        return {}
+    r = get_redis_connection("default")
+    pipe = r.pipeline()
+    for page_id, psid in pairs:
+        pipe.hgetall(_key(page_id, psid))
+    results = pipe.execute()
+
+    now = time.time()
+    out: dict[tuple[str, str], bool] = {}
+    for (page_id, psid), data in zip(pairs, results):
+        active = False
+        if data and data.get(b"human_active", b"0").decode() == "1":
+            expires_at = int((data.get(b"human_active_expires_at", b"0") or b"0").decode() or 0)
+            active = not (expires_at and now > expires_at)
+        out[(page_id, psid)] = active
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Order Draft  (EPIC C — multi-turn checkout)
 # ---------------------------------------------------------------------------

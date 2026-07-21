@@ -42,6 +42,12 @@ def handle_comment_auto_reply(
     """
     dedup_key = f"COMMENT_AUTOREPLY:{psid}:{post_id}"
 
+    # A comment and a DM from the same user share a PSID on the same page, so
+    # resolve the display name through the common (page, psid)-keyed seam here too.
+    # Deduplicated in the profile service, so this is a cheap no-op after the first.
+    from chat.services.profile import queue_display_name_sync
+    queue_display_name_sync(shop_id=str(shop_id), page_id=str(page_id), psid=str(psid))
+
     if webhook_event_already_processed(provider=WebhookProvider.META, external_event_id=dedup_key):
         logger.info("Comment auto-reply deduplicated: %s", dedup_key)
         return False

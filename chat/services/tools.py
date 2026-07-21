@@ -211,7 +211,7 @@ def execute_tool(
         elif tool_name == "search_faq":
             return _search_faq(shop_id=shop_id, **tool_args)
         elif tool_name == "get_older_messages":
-            return _get_older_messages(shop_id=shop_id, psid=psid, **tool_args)
+            return _get_older_messages(shop_id=shop_id, psid=psid, channel=channel, **tool_args)
         elif tool_name == "get_saved_addresses":
             return _get_saved_addresses(shop_id=shop_id, channel=channel, channel_identity=psid)
         else:
@@ -527,12 +527,13 @@ def _search_faq(*, shop_id: str, query: str) -> dict:
     return {"results": final_results}
 
 
-def _get_older_messages(*, shop_id: str, psid: str, before_timestamp: int, limit: int = 20) -> dict:
+def _get_older_messages(*, shop_id: str, psid: str, channel: str, before_timestamp: int, limit: int = 20) -> dict:
     from chat.selectors import message_list_for_psid
 
     messages = message_list_for_psid(
         shop_id=shop_id,
         psid=psid,
+        channel=channel,
         limit=min(limit, 50),
         before_timestamp=before_timestamp,
     )

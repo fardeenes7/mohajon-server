@@ -32,7 +32,7 @@ from chat.api.serializers import (
     HumanTakeoverSerializer,
 )
 from chat.models import FAQEntry, ChatMessage, MessageDirection
-from chat.selectors import conversation_list_for_shop, message_list_for_psid
+from chat.selectors import conversation_list_for_shop
 
 from webhooks.services import webhook_signature_valid
 from chat.tasks import process_inbound_message, embed_faq_entry
@@ -119,9 +119,16 @@ class InboxListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from chat.services.bot_state import bot_state_human_active_map
+
         shop_id = _get_shop_id(request)
-        conversations = conversation_list_for_shop(shop_id=shop_id)
-        serializer = ConversationListSerializer(conversations, many=True)
+        conversations = list(conversation_list_for_shop(shop_id=shop_id))
+        # One batched Redis round-trip for all rows' human-active state.
+        pairs = [(c.metadata.get("page_id") or "", c.channel_identity) for c in conversations]
+        human_active_map = bot_state_human_active_map(pairs)
+        serializer = ConversationListSerializer(
+            conversations, many=True, context={"human_active_map": human_active_map},
+        )
         return Response(serializer.data)
 
 
@@ -129,8 +136,20 @@ class InboxDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, psid: str):
+        from chat.models import ChannelChoices
+        from chat.selectors import mark_conversation_read, inbox_message_history
+
         shop_id = _get_shop_id(request)
-        messages = message_list_for_psid(shop_id=shop_id, psid=psid, limit=50)
+        channel = request.query_params.get("channel", ChannelChoices.FACEBOOK)
+        before = request.query_params.get("before")
+        before_ts = int(before) if before and before.isdigit() else None
+        messages = inbox_message_history(
+            shop_id=shop_id, psid=psid, channel=channel, limit=50, before_timestamp=before_ts,
+        )
+        # Opening the thread clears its unread state. Skip when paginating older
+        # history (a `before` cursor) so a scroll-back doesn't mark-read prematurely.
+        if before_ts is None:
+            mark_conversation_read(shop_id=shop_id, channel=channel, psid=psid)
         return Response(messages)
 
 
@@ -142,19 +161,46 @@ class HumanTakeoverView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        shop_id = _get_shop_id(request)
         serializer = HumanTakeoverSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         d = serializer.validated_data
         page_id = d["page_id"]
         psid = d["psid"]
         action = d["action"]
+        channel = d.get("channel")
+
+        from chat.services.engine import record_system_event
+        from chat.services.realtime import publish_conversation_update
+        from chat.models import Conversation
 
         if action == "takeover":
             bot_state_set_human_active(page_id=page_id, psid=psid, ttl_minutes=30)
-            return Response({"status": "human_active"})
+            record_system_event(
+                shop_id=shop_id, channel=channel, channel_identity=psid,
+                event="human_takeover",
+                text="An agent took over this conversation. The bot is paused.",
+                page_id=page_id,
+            )
+            new_status = "human_active"
         else:
             bot_state_clear_human_active(page_id=page_id, psid=psid)
-            return Response({"status": "bot_resumed"})
+            record_system_event(
+                shop_id=shop_id, channel=channel, channel_identity=psid,
+                event="bot_resumed",
+                text="Conversation handed back to the bot.",
+                page_id=page_id,
+            )
+            new_status = "bot_resumed"
+
+        # Push the updated bot_active state to open inboxes so the header flips live.
+        conv = Conversation.objects.filter(
+            shop_id=shop_id, channel=channel, channel_identity=psid, deleted_at__isnull=True,
+        ).first()
+        if conv:
+            publish_conversation_update(shop_id=shop_id, conversation=conv)
+
+        return Response({"status": new_status})
 
 
 # ---------------------------------------------------------------------------
@@ -194,12 +240,14 @@ class AgentSendView(APIView):
             channel=channel,
             channel_identity=psid,
         )
-        
-        if created or conversation.metadata.get("page_id") != page_id:
+
+        # Only overwrite the stored page_id when the caller actually supplied one
+        # (WhatsApp sends no page_id; a blank must not clobber a good value).
+        if page_id and conversation.metadata.get("page_id") != page_id:
             conversation.metadata["page_id"] = page_id
             conversation.save(update_fields=["metadata"])
 
-        ChatMessage.objects.create(
+        message = ChatMessage.objects.create(
             shop_id=shop_id,
             tenant_id=shop_id,
             conversation=conversation,
@@ -207,6 +255,13 @@ class AgentSendView(APIView):
             text=text,
             timestamp=int(time.time() * 1000),
         )
+
+        # Echo to every open agent dashboard for this shop (including the sender's
+        # other tabs) so the thread updates live without a refresh.
+        from chat.services.realtime import publish_new_message, publish_conversation_update
+        publish_new_message(shop_id=shop_id, message=message)
+        publish_conversation_update(shop_id=shop_id, conversation=conversation)
+
         return Response({"status": "sent"})
 
 
