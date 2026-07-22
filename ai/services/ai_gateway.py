@@ -38,7 +38,10 @@ class AIGateway:
 
     def _get_client(self, provider: str) -> Any:
         if provider not in self._client_cache:
-            if provider == AIModelProvider.OPENAI:
+            if provider in (AIModelProvider.OPENAI, AIModelProvider.GOOGLE):
+                # Both providers are served through the Vercel AI gateway with
+                # namespaced model ids ("openai/…", "google/…"), so the client
+                # is the same OpenAI-compatible client regardless of provider.
                 self._client_cache[provider] = OpenAI(
                     api_key=settings.OPENAI_API_KEY,
                     base_url=self._OPENAI_BASE_URL,

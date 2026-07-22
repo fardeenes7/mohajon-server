@@ -7,6 +7,7 @@ from core.models import SoftDeleteModel, TenantModel
 
 class AIModelProvider(models.TextChoices):
     OPENAI = "OPENAI", "OpenAI"
+    GOOGLE = "GOOGLE", "Google"
     ANTHROPIC = "ANTHROPIC", "Anthropic"
     STABILITY = "STABILITY", "Stability AI"
     CUSTOM = "CUSTOM", "Custom"

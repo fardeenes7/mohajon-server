@@ -21,20 +21,21 @@ class ResolvedAIModel:
 _FALLBACK_MODELS: dict[str, ResolvedAIModel] = {
     AIModelUsage.CHAT_COMPLETION: ResolvedAIModel(
         usage=AIModelUsage.CHAT_COMPLETION,
-        provider="OPENAI",
-        model_name="gpt-4o-mini",
-        input_price_per_1m_tokens=Decimal("0.00015"),
-        output_price_per_1m_tokens=Decimal("0.0006"),
+        provider="GOOGLE",
+        model_name="google/gemini-3.5-flash-lite",
+        input_price_per_1m_tokens=Decimal("0.30"),
+        output_price_per_1m_tokens=Decimal("2.50"),
     ),
     AIModelUsage.EMBEDDING: ResolvedAIModel(
         usage=AIModelUsage.EMBEDDING,
-        provider="OPENAI",
-        model_name="text-embedding-3-small",
+        provider="GOOGLE",
+        model_name="google/gemini-embedding-2",
+        input_price_per_1m_tokens=Decimal("0.20"),
     ),
     AIModelUsage.IMAGE_GENERATION: ResolvedAIModel(
         usage=AIModelUsage.IMAGE_GENERATION,
         provider="OPENAI",
-        model_name="gpt-image-1",
+        model_name="openai/gpt-image-1",
     ),
 }
 

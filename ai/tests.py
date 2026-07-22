@@ -1,4 +1,4 @@
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 from unittest.mock import MagicMock, patch
 
 from mohajon.celery import app as celery_app
@@ -47,8 +47,8 @@ class AIModelRegistryResolverTests(SimpleTestCase):
 
 		resolved = resolve_ai_model(usage=AIModelUsage.CHAT_COMPLETION)
 
-		self.assertEqual(resolved.model_name, "gpt-4o-mini")
-		self.assertEqual(resolved.provider, "OPENAI")
+		self.assertEqual(resolved.model_name, "google/gemini-3.5-flash-lite")
+		self.assertEqual(resolved.provider, "GOOGLE")
 
 	@patch("ai.services.ai_model_registry.AIModelRegistry.objects")
 	def test_resolve_ai_model_prefers_active_default(self, objects_mock) -> None:
@@ -88,5 +88,214 @@ class AIModelRegistryResolverTests(SimpleTestCase):
 
 		resolved = resolve_ai_model(usage=AIModelUsage.EMBEDDING)
 
-		self.assertEqual(resolved.model_name, "text-embedding-3-small")
-		self.assertEqual(resolved.provider, "OPENAI")
+		self.assertEqual(resolved.model_name, "google/gemini-embedding-2")
+		self.assertEqual(resolved.provider, "GOOGLE")
+
+
+def _gateway_fixture():
+    """A trimmed, realistic slice of the Vercel AI gateway /models response."""
+    return [
+        # google text (the handcoded default + a fallback)
+        {
+            "id": "google/gemini-3.5-flash-lite",
+            "type": "language",
+            "name": "Gemini 3.5 Flash Lite",
+            "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]},
+            "context_window": 1000000,
+            "pricing": {"input": "0.0000003", "output": "0.0000025"},
+        },
+        {
+            "id": "google/gemini-3.1-flash-lite",
+            "type": "language",
+            "name": "Gemini 3.1 Flash Lite",
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "pricing": {"input": "0.00000025", "output": "0.0000015"},
+        },
+        # openai text fallbacks
+        {
+            "id": "openai/gpt-5-mini",
+            "type": "language",
+            "name": "GPT-5 mini",
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "pricing": {"input": "0.00000025", "output": "0.000002"},
+        },
+        {
+            "id": "openai/gpt-5.4-nano",
+            "type": "language",
+            "name": "GPT-5.4 nano",
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "pricing": {"input": "0.0000002", "output": "0.00000125"},
+        },
+        # google embedding (the handcoded embedding default)
+        {
+            "id": "google/gemini-embedding-2",
+            "type": "embedding",
+            "name": "Gemini Embedding 2",
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "pricing": {"input": "0.0000002"},
+        },
+        # openai embedding (synced, but not a default)
+        {
+            "id": "openai/text-embedding-3-small",
+            "type": "embedding",
+            "name": "text-embedding-3-small",
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "pricing": {"input": "0.00000002"},
+        },
+        # must be SKIPPED: multimodal image output typed as "language"
+        {
+            "id": "google/gemini-3.5-flash-image",
+            "type": "language",
+            "name": "Gemini 3.5 Flash Image",
+            "modalities": {"input": ["text"], "output": ["text", "image"]},
+            "pricing": {"input": "0.0000003", "output": "0.0000025"},
+        },
+        # must be SKIPPED: image type
+        {
+            "id": "openai/gpt-image-1",
+            "type": "image",
+            "name": "GPT Image 1",
+            "modalities": {"input": ["text"], "output": ["image"]},
+            "pricing": {"input": "0.000005", "output": "0.00004"},
+        },
+        # must be SKIPPED: provider not google/openai
+        {
+            "id": "alibaba/qwen-3-14b",
+            "type": "language",
+            "name": "Qwen3-14B",
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "pricing": {"input": "0.00000012", "output": "0.00000024"},
+        },
+    ]
+
+
+class SyncAIModelsTests(TestCase):
+    def _sync(self, **kwargs):
+        from ai.services.model_sync import sync_ai_models
+
+        return sync_ai_models(models=_gateway_fixture(), **kwargs)
+
+    def test_only_google_openai_text_and_embedding_are_synced(self):
+        from ai.models import AIModelRegistry, AIModelProvider, AIModelUsage
+
+        stats = self._sync()
+
+        rows = AIModelRegistry.objects.all()
+        names = set(rows.values_list("model_name", flat=True))
+        # 4 text + 2 embedding = 6 kept; image/other-provider skipped.
+        self.assertEqual(rows.count(), 6)
+        self.assertNotIn("google/gemini-3.5-flash-image", names)
+        self.assertNotIn("openai/gpt-image-1", names)
+        self.assertNotIn("alibaba/qwen-3-14b", names)
+        self.assertEqual(stats.created, 6)
+        self.assertEqual(stats.skipped, 3)
+
+        providers = set(rows.values_list("provider", flat=True))
+        self.assertTrue(providers <= {AIModelProvider.GOOGLE, AIModelProvider.OPENAI})
+
+    def test_capabilities_recorded_in_metadata(self):
+        from ai.models import AIModelRegistry, AIModelUsage
+
+        self._sync()
+
+        text_row = AIModelRegistry.objects.get(model_name="google/gemini-3.5-flash-lite")
+        self.assertEqual(text_row.usage, AIModelUsage.CHAT_COMPLETION)
+        self.assertEqual(text_row.metadata["capability"], "text")
+
+        emb_row = AIModelRegistry.objects.get(model_name="google/gemini-embedding-2")
+        self.assertEqual(emb_row.usage, AIModelUsage.EMBEDDING)
+        self.assertEqual(emb_row.metadata["capability"], "embedding")
+
+    def test_pricing_converted_to_per_million_tokens(self):
+        from decimal import Decimal
+        from ai.models import AIModelRegistry
+
+        self._sync()
+
+        row = AIModelRegistry.objects.get(model_name="google/gemini-3.5-flash-lite")
+        # 0.0000003 USD/token -> 0.30 USD / 1M tokens
+        self.assertEqual(row.input_price_per_1m_tokens, Decimal("0.300000"))
+        self.assertEqual(row.output_price_per_1m_tokens, Decimal("2.500000"))
+
+    def test_handcoded_defaults_and_fallback_priority(self):
+        from ai.models import AIModelRegistry, AIModelUsage
+
+        self._sync()
+
+        text_default = AIModelRegistry.objects.get(
+            usage=AIModelUsage.CHAT_COMPLETION, is_default=True
+        )
+        self.assertEqual(text_default.model_name, "google/gemini-3.5-flash-lite")
+
+        emb_default = AIModelRegistry.objects.get(
+            usage=AIModelUsage.EMBEDDING, is_default=True
+        )
+        self.assertEqual(emb_default.model_name, "google/gemini-embedding-2")
+
+        # Fallbacks ranked in declared order (lower priority = preferred).
+        p = {
+            r.model_name: r.priority
+            for r in AIModelRegistry.objects.filter(usage=AIModelUsage.CHAT_COMPLETION)
+        }
+        self.assertLess(p["google/gemini-3.5-flash-lite"], p["google/gemini-3.1-flash-lite"])
+        self.assertLess(p["google/gemini-3.1-flash-lite"], p["openai/gpt-5-mini"])
+        self.assertLess(p["openai/gpt-5-mini"], p["openai/gpt-5.4-nano"])
+
+    def test_resolver_picks_handcoded_text_default(self):
+        from ai.models import AIModelUsage
+        from ai.services.ai_model_registry import resolve_ai_model
+
+        self._sync()
+
+        resolved = resolve_ai_model(usage=AIModelUsage.CHAT_COMPLETION)
+        self.assertEqual(resolved.model_name, "google/gemini-3.5-flash-lite")
+        self.assertEqual(resolved.provider, "GOOGLE")
+
+    def test_resync_preserves_admin_routing_but_refreshes_price(self):
+        from decimal import Decimal
+        from ai.models import AIModelRegistry, AIModelUsage
+
+        self._sync()
+
+        # Admin overrides the default and deactivates a model.
+        admin_choice = AIModelRegistry.objects.get(model_name="openai/gpt-5-mini")
+        AIModelRegistry.objects.filter(
+            usage=AIModelUsage.CHAT_COMPLETION, is_default=True
+        ).update(is_default=False)
+        admin_choice.is_default = True
+        admin_choice.priority = 1
+        admin_choice.save()
+
+        # Gateway changes a price on re-sync.
+        models = _gateway_fixture()
+        for m in models:
+            if m["id"] == "openai/gpt-5-mini":
+                m["pricing"]["input"] = "0.0000005"
+
+        from ai.services.model_sync import sync_ai_models
+
+        stats = sync_ai_models(models=models)
+        self.assertEqual(stats.created, 0)
+        self.assertEqual(stats.updated, 6)
+
+        admin_choice.refresh_from_db()
+        # Admin's routing choices survive the re-sync...
+        self.assertTrue(admin_choice.is_default)
+        self.assertEqual(admin_choice.priority, 1)
+        # ...but pricing is refreshed. 0.0000005/tok -> 0.50/1M
+        self.assertEqual(admin_choice.input_price_per_1m_tokens, Decimal("0.500000"))
+        # Handcoded default is NOT re-applied because a default already exists.
+        self.assertFalse(
+            AIModelRegistry.objects.get(
+                model_name="google/gemini-3.5-flash-lite"
+            ).is_default
+        )
+
+    def test_no_defaults_flag_skips_default_seeding(self):
+        from ai.models import AIModelRegistry, AIModelUsage
+
+        self._sync(apply_defaults=False)
+
+        self.assertFalse(
+            AIModelRegistry.objects.filter(is_default=True).exists()
+        )
