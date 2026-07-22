@@ -23,19 +23,28 @@ def handle_referral_payout(sender, instance, created, **kwargs):
             with transaction.atomic():
                 # 1. Verify referral
                 referral.status = 'VERIFIED'
-                
+
                 # Reward logic: 500 BDT in AI credits as a thank you
                 reward = Decimal('500.00')
                 referral.reward_amount = reward
-                
-                # 2. Inject credits into referrer shop's balance
+
+                # 2. Grant credits to the referrer as a ledger lot. The ledger
+                #    is the source of truth; grant_ai_credits keeps the cached
+                #    ShopSettings.ai_credit_balance in sync.
                 from shops.models import ShopSettings
-                shop_settings, _ = ShopSettings.objects.get_or_create(shop=referral.referrer_shop)
-                
-                # Use Decimal for financial fields
-                shop_settings.ai_credit_balance += reward
-                shop_settings.save()
-                
+                from ai.models import AICreditCategory
+                from ai.services.ai_credits import grant_ai_credits
+
+                # Ensure a settings row exists so the cached balance can sync.
+                ShopSettings.objects.get_or_create(shop=referral.referrer_shop)
+
+                grant_ai_credits(
+                    shop_id=referral.referrer_shop_id,
+                    credits=reward,
+                    category=AICreditCategory.REFERRAL,
+                    note=f"Referral reward ({referral.id})",
+                )
+
                 referral.reward_applied = True
                 referral.save()
                 

@@ -76,3 +76,59 @@ def generate_ad_image(self, *, shop_id: str, prompt: str) -> dict[str, str]:
     except Exception as exc:
         logger.error("generate_ad_image failed: %s", exc)
         self.retry(exc=exc)
+
+
+@shared_task(
+    name="ai.tasks.sweep_expired_ai_credits",
+    queue="default",
+)
+def sweep_expired_ai_credits() -> dict[str, int]:
+    """
+    Enforce AI credit expiry (global_business_rules_and_limits.md §3).
+
+    Marks every lot past its ``expires_at`` as expired, zeroes its remaining
+    credits, and reconciles each affected shop's cached balance. Idempotent:
+    already-expired lots are skipped.
+    """
+    from django.db import transaction
+    from django.utils import timezone
+
+    from ai.models import AICreditLot
+    from ai.services.ai_credits import _sync_cached_balance
+
+    now = timezone.now()
+    expired_qs = AICreditLot.objects.filter(
+        deleted_at__isnull=True,
+        is_expired=False,
+        expires_at__isnull=False,
+        expires_at__lte=now,
+    )
+
+    affected_shops: set[str] = set()
+    lots_expired = 0
+
+    with transaction.atomic():
+        for lot in expired_qs.select_for_update():
+            lot.is_expired = True
+            lot.credits_remaining = 0
+            lot.is_exhausted = True
+            lot.save(
+                update_fields=[
+                    "is_expired",
+                    "credits_remaining",
+                    "is_exhausted",
+                    "updated_at",
+                ]
+            )
+            affected_shops.add(str(lot.shop_id))
+            lots_expired += 1
+
+    for shop_id in affected_shops:
+        _sync_cached_balance(shop_id)
+
+    logger.info(
+        "sweep_expired_ai_credits: expired %d lots across %d shops",
+        lots_expired,
+        len(affected_shops),
+    )
+    return {"lots_expired": lots_expired, "shops_affected": len(affected_shops)}

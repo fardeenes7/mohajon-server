@@ -81,18 +81,34 @@ class AICreditService:
                 topup.expires_at = timezone.now() + timedelta(days=60)
                 topup.save()
 
-                # 3. Add credits to ShopSettings
-                settings_obj, _ = ShopSettings.objects.get_or_create(
-                    shop=self.shop,
-                    defaults={'tenant_id': self.shop.id}
+                # 3. Grant the purchased credits as a ledger lot. The ledger
+                #    is the source of truth; grant_ai_credits also reconciles
+                #    the cached ShopSettings.ai_credit_balance.
+                from ai.models import AICreditCategory
+                from ai.services.ai_credits import (
+                    available_credits,
+                    grant_ai_credits,
                 )
-                settings_obj.ai_credit_balance += Decimal(str(topup.credits_purchased))
-                settings_obj.save(update_fields=['ai_credit_balance', 'updated_at'])
+
+                # Ensure a settings row exists so the cached balance can sync.
+                ShopSettings.objects.get_or_create(
+                    shop=self.shop,
+                    defaults={'tenant_id': self.shop.id},
+                )
+
+                grant_ai_credits(
+                    shop_id=self.shop.id,
+                    credits=Decimal(str(topup.credits_purchased)),
+                    category=AICreditCategory.PURCHASED,
+                    expires_at=topup.expires_at,
+                    note=f"Top-up {topup.id}",
+                    source_topup=topup,
+                )
 
             return {
-                "status": "SUCCESS", 
+                "status": "SUCCESS",
                 "credits_added": topup.credits_purchased,
-                "new_balance": float(settings_obj.ai_credit_balance)
+                "new_balance": float(available_credits(shop_id=self.shop.id)),
             }
             
         return {"status": "FAILED", "error": res.get('statusMessage')}

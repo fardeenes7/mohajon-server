@@ -277,6 +277,11 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': 60 * 60 * 24,  # Every 24 hours
         'options': {'queue': 'default'},
     },
+    'sweep-expired-ai-credits-daily': {
+        'task': 'ai.tasks.sweep_expired_ai_credits',
+        'schedule': 60 * 60 * 24,  # Every 24 hours
+        'options': {'queue': 'default'},
+    },
     'sweep-old-messenger-messages': {
         'task': 'chat.tasks.sweep_old_messages',
         'schedule': 60 * 60 * 24,  # Every 24 hours (30-day retention policy)

@@ -1,3 +1,6 @@
+import uuid
+
+from django.conf import settings
 from django.db import models
 from django.db.models import Q
 from core.models import SoftDeleteModel, TenantModel
@@ -98,3 +101,86 @@ class AIUsageLog(TenantModel):
 
     def __str__(self) -> str:
         return f"{self.shop_id} | {self.usage_type} | {self.credits_deducted} credits"
+
+
+class AICreditCategory(models.TextChoices):
+    PURCHASED = "PURCHASED", "Purchased"
+    BONUS = "BONUS", "Bonus"
+    PROMOTION = "PROMOTION", "Promotion"
+    REFERRAL = "REFERRAL", "Referral"
+    ADJUSTMENT = "ADJUSTMENT", "Manual Adjustment"
+
+
+class AICreditLot(TenantModel):
+    """
+    A single grant of AI credits ("lot") with a category and optional expiry.
+
+    The ledger of lots is the SOURCE OF TRUTH for a shop's usable AI credit
+    balance. Deductions draw from lots FIFO by soonest expiry (non-expiring
+    lots last); the flat ``ShopSettings.ai_credit_balance`` is kept as a
+    synced cache for existing readers (dashboards, etc.).
+
+    Sources of credit — purchases, referral/affiliate bonuses, promotions,
+    and manual platform-admin adjustments — all become lots via
+    ``ai.services.ai_credits.grant_ai_credits``.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shop = models.ForeignKey(
+        "shops.Shop",
+        on_delete=models.CASCADE,
+        related_name="ai_credit_lots",
+    )
+    category = models.CharField(
+        max_length=20,
+        choices=AICreditCategory.choices,
+        db_index=True,
+    )
+
+    # Original grant amount and the portion still spendable.
+    credits_granted = models.DecimalField(max_digits=12, decimal_places=2)
+    credits_remaining = models.DecimalField(max_digits=12, decimal_places=2)
+
+    # null expiry = credits never expire.
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    # State flags maintained by the service / sweep task.
+    is_exhausted = models.BooleanField(default=False)  # credits_remaining == 0
+    is_expired = models.BooleanField(default=False)  # swept past expires_at
+
+    # Link back to the purchase that funded a PURCHASED lot (if any).
+    source_topup = models.ForeignKey(
+        "billing.AICreditTopUp",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="credit_lots",
+    )
+
+    note = models.CharField(max_length=255, blank=True)  # admin-entered reason
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="granted_ai_credit_lots",
+    )
+
+    class Meta:
+        # Soonest-expiry first so FIFO draw is the natural ordering; nulls
+        # (non-expiring) sort last in the active-lots query.
+        ordering = ["expires_at", "created_at"]
+        indexes = [
+            models.Index(
+                fields=["shop", "is_expired", "is_exhausted", "expires_at"],
+                name="ai_credit_lot_active_idx",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.tenant_id:
+            self.tenant_id = self.shop_id
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.shop_id} | {self.category} | {self.credits_remaining}/{self.credits_granted}"
