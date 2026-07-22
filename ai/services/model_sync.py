@@ -43,8 +43,15 @@ _USAGE_CAPABILITY: dict[str, str] = {
 # from the Django admin afterward and re-syncs won't stomp their choices.
 # Kept here (not in the DB) intentionally: the synchronizer is the source of
 # the *initial* preference ordering; the admin panel owns it thereafter.
-DEFAULT_TEXT_MODEL = "google/gemini-3.5-flash-lite"
+#
+# NOTE: gemini-2.5-flash-lite leads the ladder because it is the cheapest Google
+# text model reachable on the Vercel gateway's free tier — the 3.x-flash-lite
+# models require paid credits (403 on free tier). Once the gateway account has
+# paid credits, an admin can promote 3.5-flash-lite from the Django admin; the
+# runtime gateway also walks this ladder automatically on a 403/429.
+DEFAULT_TEXT_MODEL = "google/gemini-2.5-flash-lite"
 DEFAULT_TEXT_FALLBACKS = [
+    "google/gemini-3.5-flash-lite",
     "google/gemini-3.1-flash-lite",
     "openai/gpt-5-mini",
     "openai/gpt-5.4-nano",

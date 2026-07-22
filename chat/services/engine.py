@@ -55,21 +55,62 @@ def _build_system_prompt(*, shop_id: str) -> str:
     now_str = timezone.now().strftime("%A, %d %B %Y, %I:%M %p UTC")
 
     return (
-        f"You are a helpful, friendly AI shopping assistant for **{shop_name}**.\n"
+        f"You are **{shop_name}**'s AI shopping assistant on Messenger — think of yourself as a "
+        f"warm, switched-on salesperson at the shop's counter, not a robot.\n"
         f"Current date and time: {now_str}.\n"
-        f"All prices are in {currency}.\n\n"
-        "## Core Instructions\n"
-        "- Always respond in the same language as the customer's message.\n"
-        "- Call a function when uncertain rather than hallucinating an answer.\n"
-        "- NEVER call `confirm_order` directly. Always call `prepare_order_draft` first, "
-        "present the summary, and wait for explicit customer confirmation via a Messenger button.\n"
-        "- If a question is about shop policies, call `search_faq` before attempting to answer "
-        "from your own knowledge.\n"
-        "- If `confidence < 0.65`, ask a clarifying question before calling any mutating function.\n"
-        "- Never expose raw error strings or stack traces to the customer.\n"
-        "- If `search_faq` returns no results above the threshold, inform the customer you cannot "
-        "answer and offer to escalate to a human agent.\n"
-    )
+        f"All prices are in {currency} (৳ for BDT).\n"
+        "\n"
+        "## Who you are\n"
+        "- You genuinely want to help the customer find the right thing and feel taken care of.\n"
+        "- You know the shop's products, prices, offers, and policies (use your tools to look them up — "
+        "never guess).\n"
+        "- You are honest: if something is out of stock, unavailable, or you don't know, you say so kindly "
+        "and offer the next best step.\n"
+        "\n"
+        "## Language — match the customer, always\n"
+        "- Reply in the SAME language the customer used, turn by turn:\n"
+        "  • Bangla message → reply in natural, everyday Bangla (not stiff/literary Bangla).\n"
+        "  • English message → reply in English.\n"
+        "  • Banglish (Bangla written in English letters, e.g. \"vai ei shirt ta ache?\") → reply in "
+        "Banglish the same way. Do NOT switch them to Bangla script unless they wrote in Bangla script.\n"
+        "- If they mix languages, mirror the mix. When unsure, lean Bangla — most customers are "
+        "Bangladeshi.\n"
+        "- Keep numbers, sizes, and prices clear regardless of language.\n"
+        "\n"
+        "## Tone — casually formal, sounds like a real person\n"
+        "- Warm, respectful, and human — like a friendly shopkeeper, not a call-center script.\n"
+        "- In Bangla use the polite 'আপনি' form (never 'তুই/তুমি'). Be friendly but never overly casual "
+        "or slangy.\n"
+        "- Short, natural sentences. A little warmth and the occasional emoji (🙂🛍️👍) is good; don't "
+        "overdo it.\n"
+        "- Don't sound scripted or repeat the same canned line every message. Vary naturally.\n"
+        "\n"
+        "## Islamic greeting etiquette (important)\n"
+        "- If the customer greets YOU with a salam first (\"assalamu alaikum\", \"আসসালামু আলাইকুম\", "
+        "\"slm\", \"salam\", etc.), you MUST reply beginning with **\"Walaikum assalam\"** "
+        "(Bangla: \"ওয়ালাইকুম আসসালাম\") before anything else.\n"
+        "- When YOU start a greeting or welcome (first contact, or greeting someone who did not salam "
+        "first), begin with **\"Assalamu alaikum\"** (Bangla: \"আসসালামু আলাইকুম\"), then continue "
+        "warmly — e.g. \"Assalamu alaikum! Welcome to {shop} 🙂 how can I help?\".\n"
+        "- Match the greeting to the reply language (Bangla script for Bangla, Latin for English/Banglish).\n"
+        "- Do not add a salam to the middle of an ongoing conversation — only at genuine greetings.\n"
+        "\n"
+        "## How you work\n"
+        "- Call a tool whenever you are unsure — for product availability, price, stock, order status, or "
+        "policies — instead of making something up.\n"
+        "- If a question is about shop policies (returns, shipping, exchange, etc.), call `search_faq` "
+        "BEFORE answering from your own knowledge.\n"
+        "- If `search_faq` returns nothing above the threshold, tell the customer you don't have that "
+        "detail and offer to connect them with a human agent.\n"
+        "- NEVER call `confirm_order` directly. Always call `prepare_order_draft` first, show the customer a "
+        "clear summary (items, quantities, price, delivery), and wait for their explicit confirmation "
+        "before placing the order.\n"
+        "- If `confidence < 0.65`, ask one short clarifying question before calling any mutating tool.\n"
+        "- Never expose raw error strings, stack traces, internal IDs, or system details to the customer. "
+        "If something breaks, apologize briefly and offer to have the team follow up.\n"
+        "- Keep the customer moving toward a helpful outcome: answer, suggest, and gently guide toward a "
+        "purchase or resolution without being pushy.\n"
+    ).replace("{shop}", shop_name)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +242,39 @@ def record_system_event(
 
 
 # ---------------------------------------------------------------------------
+# AI failure classification → conversation marker
+# ---------------------------------------------------------------------------
+
+def _classify_ai_failure(exc: Exception) -> tuple[str, str]:
+    """
+    Map an AI-turn failure to a (machine key, agent-facing label) pair for a
+    SYSTEM timeline marker. The key is a stable string the inbox UI uses to pick
+    an icon; the label is the human text shown on the marker. These markers are
+    agent-facing only — the customer still receives the friendly fallback reply.
+    """
+    from openai import (
+        RateLimitError,
+        PermissionDeniedError,
+        APIConnectionError,
+        BadRequestError,
+    )
+
+    if isinstance(exc, RateLimitError):
+        return "ai_rate_limited", "Bot skipped — AI is rate-limited right now. Please retry in a moment."
+    if isinstance(exc, PermissionDeniedError):
+        return "ai_model_unavailable", "Bot skipped — the AI model is currently unavailable."
+
+    detail = f"{getattr(exc, 'code', '') or ''} {exc}".lower()
+    if isinstance(exc, BadRequestError) and (
+        "context_length" in detail or "maximum context" in detail or "too many tokens" in detail
+    ):
+        return "ai_context_overflow", "Bot skipped — the conversation is too long for the AI to process."
+    if isinstance(exc, APIConnectionError):
+        return "ai_connection_error", "Bot skipped — couldn't reach the AI service."
+    return "ai_error", "Bot skipped — the AI ran into an unexpected problem."
+
+
+# ---------------------------------------------------------------------------
 # Main engine entry point
 # ---------------------------------------------------------------------------
 
@@ -309,6 +383,12 @@ def run_ai_turn(
                         "AI tool-call depth limit reached for shop=%s identity=%s", shop_id, channel_identity
                     )
                     _push_dlq_alert(shop_id=shop_id, reason="max_tool_calls_exceeded")
+                    record_system_event(
+                        shop_id=shop_id, channel=channel, channel_identity=channel_identity,
+                        event="ai_tool_limit",
+                        text="Bot skipped — the AI needed too many lookups to answer this one.",
+                        page_id=page_id,
+                    )
                     break
 
                 for tool_call in msg.tool_calls:
@@ -335,6 +415,11 @@ def run_ai_turn(
     except Exception as exc:
         logger.error("AI engine error shop=%s identity=%s: %s", shop_id, channel_identity, exc)
         _push_dlq_alert(shop_id=shop_id, reason=str(exc))
+        event_key, event_label = _classify_ai_failure(exc)
+        record_system_event(
+            shop_id=shop_id, channel=channel, channel_identity=channel_identity,
+            event=event_key, text=event_label, page_id=page_id,
+        )
         return _persist_fallback()
 
     # 5. Deduct credits + write audit log via gateway (single consolidated entry)

@@ -5,10 +5,20 @@ from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
-from openai import OpenAI, APIError, APIConnectionError, RateLimitError
+from openai import (
+    OpenAI,
+    APIError,
+    APIConnectionError,
+    RateLimitError,
+    PermissionDeniedError,
+)
 
 from ai.models import AIModelUsage, AIModelProvider, AIUsageLog
-from ai.services.ai_model_registry import resolve_ai_model, ResolvedAIModel
+from ai.services.ai_model_registry import (
+    resolve_ai_model,
+    resolve_ai_model_ladder,
+    ResolvedAIModel,
+)
 from ai.services.ai_credits import calculate_credits, deduct_ai_credits
 
 logger = logging.getLogger(__name__)
@@ -35,6 +45,10 @@ class AIGateway:
         self.shop_id = shop_id
         self.reference_id = reference_id
         self._client_cache: dict[str, Any] = {}
+        # The model config that actually produced the last successful response.
+        # The ladder walk may fall past a restricted/rate-limited model, so this
+        # records what really ran for accurate credit accounting + audit logging.
+        self._last_used_model: ResolvedAIModel | None = None
 
     def _get_client(self, provider: str) -> Any:
         if provider not in self._client_cache:
@@ -113,7 +127,6 @@ class AIGateway:
         tools: list[dict[str, Any]],
         tool_choice: str = "auto",
         usage_type: str = AIModelUsage.CHAT_COMPLETION,
-        _retry_attempt: int = 0,
     ) -> Any:
         """
         Execute a single OpenAI request with tool schemas and return the raw
@@ -123,33 +136,66 @@ class AIGateway:
         Token accumulation and credit deduction happen via the caller using
         log_accumulated_usage() after the loop completes.
 
-        Implements a single automatic retry on transient 5xx / connection
-        errors (global_business_rules_and_limits.md §5 retry policy).
+        Resilience (global_business_rules_and_limits.md §5 retry policy):
+          - Walks the registry fallback ladder (default → priority-ordered
+            fallbacks → hardcoded safe model). A restricted/unavailable model
+            (403) or a rate-limited one (429) is skipped so the turn keeps
+            trying working models instead of dying on the preferred one.
+          - Transient 5xx / connection errors get one in-place retry per model
+            before moving to the next rung.
+          - The model that actually answered is recorded on
+            ``self._last_used_model`` so credit accounting reflects reality.
         """
         import time
 
-        model_config = resolve_ai_model(usage=usage_type)
-        client = self._get_client(model_config.provider)
+        ladder = resolve_ai_model_ladder(usage=usage_type)
+        last_exc: Exception | None = None
 
-        try:
-            return client.chat.completions.create(
-                model=model_config.model_name,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-            )
-        except (APIError, APIConnectionError, RateLimitError) as exc:
-            if _retry_attempt == 0:
-                time.sleep(2)
-                return self.call_chat_with_tools(
-                    messages=messages,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    usage_type=usage_type,
-                    _retry_attempt=1,
-                )
-            logger.error("AI Gateway Tool-Call Error (shop=%s): %s", self.shop_id, exc)
-            raise
+        for index, model_config in enumerate(ladder):
+            client = self._get_client(model_config.provider)
+            for attempt in range(2):  # one in-place retry for transient errors
+                try:
+                    response = client.chat.completions.create(
+                        model=model_config.model_name,
+                        messages=messages,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                    )
+                    self._last_used_model = model_config
+                    if index > 0:
+                        logger.info(
+                            "AI Gateway (shop=%s) used fallback model %s (rung %d/%d)",
+                            self.shop_id, model_config.model_name, index + 1, len(ladder),
+                        )
+                    return response
+                except (PermissionDeniedError, RateLimitError) as exc:
+                    # 403 (model not accessible) / 429 (rate-limited): retrying
+                    # the same model won't help — move to the next rung.
+                    last_exc = exc
+                    logger.warning(
+                        "AI Gateway (shop=%s) model %s unavailable (%s); trying next fallback.",
+                        self.shop_id, model_config.model_name,
+                        type(exc).__name__,
+                    )
+                    break
+                except (APIError, APIConnectionError) as exc:
+                    # Transient server/connection error: retry the same model
+                    # once, then fall through to the next rung.
+                    last_exc = exc
+                    if attempt == 0:
+                        time.sleep(2)
+                        continue
+                    logger.warning(
+                        "AI Gateway (shop=%s) model %s errored (%s); trying next fallback.",
+                        self.shop_id, model_config.model_name, exc,
+                    )
+                    break
+
+        logger.error(
+            "AI Gateway Tool-Call Error (shop=%s): all %d fallback model(s) failed; last error: %s",
+            self.shop_id, len(ladder), last_exc,
+        )
+        raise last_exc if last_exc else RuntimeError("No AI models available")
 
     def resolve_chat_model(self, usage_type: str = AIModelUsage.CHAT_COMPLETION) -> ResolvedAIModel:
         """
@@ -170,7 +216,10 @@ class AIGateway:
         and deduct credits atomically.  Call this once after a tool-call
         loop has finished rather than logging per-turn.
         """
-        model_config = resolve_ai_model(usage=usage_type)
+        # Prefer the model that actually answered — the ladder walk may have
+        # fallen past a restricted/rate-limited model to a cheaper/pricier one,
+        # so re-resolving the default here would bill the wrong rate.
+        model_config = self._last_used_model or resolve_ai_model(usage=usage_type)
 
         input_rate = model_config.input_price_per_1m_tokens or Decimal("0.15")
         output_rate = model_config.output_price_per_1m_tokens or Decimal("0.60")

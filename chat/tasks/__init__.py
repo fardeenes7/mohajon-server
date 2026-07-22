@@ -148,7 +148,7 @@ def process_inbound_message(
 
     greeting_keywords = getattr(settings_obj, "messenger_greeting_keywords", None) if settings_obj else None
     if is_greeting(message_text=message_text, keywords=greeting_keywords):
-        reply_text = greeting_reply_text()
+        reply_text = greeting_reply_text(message_text=message_text)
         # Persist inbound greeting so it appears in the agent inbox history.
         _persist_message(
             shop_id=shop_id, channel=channel, channel_identity=psid,

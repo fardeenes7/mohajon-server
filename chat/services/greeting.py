@@ -18,16 +18,33 @@ import random
 DEFAULT_GREETING_KEYWORDS: list[str] = [
     "hi", "hello", "hey", "হ্যালো", "হাই", "ভাই", "আপু",
     "কেমন আছো", "how are you", "good morning", "good afternoon", "good evening",
-    "salam", "assalamu alaikum", "salaam",
+    "salam", "assalamu alaikum", "salaam", "আসসালামু আলাইকুম", "আসসালামুয়ালাইকুম",
+    "slm", "assalamualaikum", "asslamualaikum",
 ]
 
+# Welcome replies for a plain greeting ("hi", "hello", "ভাই"). We ALWAYS open
+# with a salam — per shop etiquette the bot greets with Assalamu alaikum.
 DEFAULT_WELCOME_RESPONSES: list[str] = [
-    "আস্সালামু আলাইকুম! 😊 আমি কীভাবে সাহায্য করতে পারি?",
-    "হ্যালো! আপনাকে স্বাগতম 🛍 — কী খুঁজছেন?",
-    "Hi there! 👋 Welcome! How can I help you today?",
-    "Hello! 😊 Feel free to ask about our products, pricing, or orders!",
-    "Hey! Great to see you 🛍 — what can I help you with?",
+    "আসসালামু আলাইকুম! 😊 কীভাবে সাহায্য করতে পারি?",
+    "আসসালামু আলাইকুম! আপনাকে স্বাগতম 🛍️ — কী খুঁজছেন বলুন তো?",
+    "Assalamu alaikum! 👋 Welcome — how can I help you today?",
+    "Assalamu alaikum! 😊 Feel free to ask about our products, pricing, or orders!",
 ]
+
+# Replies when the CUSTOMER greeted with a salam first — we must open with
+# "Walaikum assalam" before welcoming them.
+DEFAULT_SALAM_REPLY_RESPONSES: list[str] = [
+    "ওয়ালাইকুম আসসালাম! 😊 কীভাবে সাহায্য করতে পারি?",
+    "ওয়ালাইকুম আসসালাম! আপনাকে স্বাগতম 🛍️ — কী খুঁজছেন?",
+    "Walaikum assalam! 👋 How can I help you today?",
+]
+
+# Salam keywords: if the inbound greeting is one of these, the customer greeted
+# with a salam first, so we reply with "Walaikum assalam".
+_SALAM_KEYWORDS: set[str] = {
+    "salam", "salaam", "slm", "assalamu alaikum", "assalamualaikum",
+    "asslamualaikum", "আসসালামু আলাইকুম", "আসসালামুয়ালাইকুম",
+}
 
 _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 
@@ -51,7 +68,25 @@ def is_greeting(
     return normalised in effective_keywords
 
 
-def greeting_reply_text(responses: list[str] | None = None) -> str:
-    """Pick a random welcome response from the configured list."""
-    pool = responses if responses else DEFAULT_WELCOME_RESPONSES
-    return random.choice(pool)
+def _is_salam(message_text: str) -> bool:
+    """True if the customer's greeting is itself a salam."""
+    return _normalize(message_text) in {_normalize(k) for k in _SALAM_KEYWORDS}
+
+
+def greeting_reply_text(
+    responses: list[str] | None = None,
+    *,
+    message_text: str | None = None,
+) -> str:
+    """
+    Pick a welcome response.
+
+    If the customer greeted with a salam first, reply with a "Walaikum assalam"
+    variant; otherwise open with an "Assalamu alaikum" welcome. Passing an
+    explicit ``responses`` list (shop-configured) overrides both.
+    """
+    if responses:
+        return random.choice(responses)
+    if message_text is not None and _is_salam(message_text):
+        return random.choice(DEFAULT_SALAM_REPLY_RESPONSES)
+    return random.choice(DEFAULT_WELCOME_RESPONSES)
