@@ -110,7 +110,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             "id", "name", "slug", "sku", "status",
             "base_price", "compare_at_price", "tax_rate",
             "total_stock", "thumbnail", "category_name",
-            "is_digital", "sort_order", "created_at",
+            "is_digital", "vector_status", "sort_order", "created_at",
         ]
         read_only_fields = fields
 
@@ -139,11 +139,11 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             "weight_grams", "length_cm", "width_cm", "height_cm",
             "is_digital", "specifications",
             "seo_title", "seo_description",
-            "sort_order", "total_stock",
+            "sort_order", "total_stock", "vector_status",
             "category", "variants", "product_media",
             "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "total_stock", "created_at", "updated_at"]
+        read_only_fields = ["id", "total_stock", "vector_status", "created_at", "updated_at"]
 
 
 class ProductWriteSerializer(serializers.Serializer):
