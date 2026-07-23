@@ -28,7 +28,7 @@ from marketing.services import (
     upsert_social_connection,
 )
 from marketing.tasks import publish_product_to_social
-from marketing.models import SocialConnection
+from marketing.models import SocialConnection, MetaUserAccount
 from marketing.api.throttles import SocialOAuthThrottle, SocialPublishThrottle
 
 
@@ -109,7 +109,8 @@ class SocialOAuthCallbackView(ShopScopedAPIView):
             return Response({"connection": SocialConnectionSerializer(connection).data})
 
         code = serializer.validated_data.get("code", "")
-        state = serializer.validated_data.get("state", "")
+        raw_state = serializer.validated_data.get("state", "") or ""
+        state = raw_state.split("#")[0]
         if not code or not state:
             return Response({"detail": "Provide code and state, or oauth_state and selected_page_id."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -149,16 +150,16 @@ class SocialOAuthCallbackView(ShopScopedAPIView):
             )
             user_info = user_info_resp.json()
 
-            from marketing.models import MetaUserAccount
-            MetaUserAccount.objects.update_or_create(
-                shop_id=shop_id,
-                defaults={
-                    "tenant_id": shop_id,
-                    "meta_user_id": user_info.get("id"),
-                    "name": user_info.get("name"),
-                    "access_token": user_access_token,
-                }
-            )
+            if user_info.get("id"):
+                MetaUserAccount.objects.update_or_create(
+                    meta_user_id=str(user_info.get("id")),
+                    defaults={
+                        "tenant_id": shop_id,
+                        "shop_id": shop_id,
+                        "name": str(user_info.get("name", "")),
+                        "access_token": user_access_token,
+                    }
+                )
 
             # 2. Fetch Pages
             pages_response = requests.get(
@@ -174,36 +175,36 @@ class SocialOAuthCallbackView(ShopScopedAPIView):
             raw_pages = pages_payload.get("data", [])
 
         except requests.RequestException as exc:
-            return Response({"detail": f"Meta API request failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+            err_detail = f"Meta API request failed: {exc}"
+            if getattr(exc, "response", None) is not None:
+                err_detail += f" | Payload: {exc.response.text}"
+            return Response({"detail": err_detail}, status=status.HTTP_502_BAD_GATEWAY)
 
         pages = [normalize_meta_page_payload(page) for page in raw_pages if page.get("id") and page.get("name") and page.get("access_token")]
         if not pages:
             return Response({"detail": "No manageable Facebook pages found for this account."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if selected_page_id:
-            selected_page = next((page for page in pages if str(page.get("id")) == str(selected_page_id)), None)
-            if not selected_page:
-                return Response({"detail": "Selected page was not returned by Meta."}, status=status.HTTP_400_BAD_REQUEST)
-
-            connection = upsert_social_connection(
+        # Automatically connect all authorized pages returned by Meta
+        connections = []
+        for page in pages:
+            conn = upsert_social_connection(
                 shop_id=shop_id,
                 provider="META",
-                page_id=str(selected_page.get("id")),
-                page_name=str(selected_page.get("name")),
-                access_token=str(selected_page.get("access_token")),
+                page_id=str(page.get("id")),
+                page_name=str(page.get("name")),
+                access_token=str(page.get("access_token")),
                 expires_in=60 * 24 * 60 * 60,
             )
-            cache.delete(f"meta_oauth_state:{shop_id}:{state}")
-            return Response({"connection": SocialConnectionSerializer(connection).data})
+            connections.append(conn)
 
-        cache.set(f"meta_oauth_pages:{shop_id}:{state}", pages, timeout=60 * 10)
-        page_preview = [{"id": page["id"], "name": page["name"]} for page in pages]
-        return Response({"oauth_state": state, "pages": SocialOAuthPageSerializer(page_preview, many=True).data})
+        cache.delete(f"meta_oauth_state:{shop_id}:{state}")
+        return Response({
+            "connected_count": len(connections),
+            "connections": SocialConnectionSerializer(connections, many=True).data
+        })
 
 
 class SocialConnectionListCreateView(ShopScopedAPIView):
-    throttle_classes = [SocialOAuthThrottle]
-
     @extend_schema(responses={200: SocialConnectionSerializer(many=True)}, tags=["marketing"])
     def get(self, request):
         shop_id = self.require_shop_id(request)

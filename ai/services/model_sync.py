@@ -49,10 +49,8 @@ _USAGE_CAPABILITY: dict[str, str] = {
 # models require paid credits (403 on free tier). Once the gateway account has
 # paid credits, an admin can promote 3.5-flash-lite from the Django admin; the
 # runtime gateway also walks this ladder automatically on a 403/429.
-DEFAULT_TEXT_MODEL = "google/gemini-2.5-flash-lite"
+DEFAULT_TEXT_MODEL = "openai/gpt-5.4-mini"
 DEFAULT_TEXT_FALLBACKS = [
-    "google/gemini-3.5-flash-lite",
-    "google/gemini-3.1-flash-lite",
     "openai/gpt-5-mini",
     "openai/gpt-5.4-nano",
 ]
