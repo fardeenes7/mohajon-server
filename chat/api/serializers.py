@@ -27,15 +27,20 @@ class ConversationListSerializer(serializers.ModelSerializer):
         model = Conversation
         fields = [
             "id", "channel", "channel_identity", "metadata", "updated_at",
-            "page_id", "display_name", "has_unread", "unread_count", "last_read_at",
+            "page_id", "display_name", "profile_pic", "has_unread", "unread_count", "last_read_at",
             "last_message_text", "last_message_direction", "last_message_at",
             "human_active", "bot_active",
         ]
 
     page_id = serializers.SerializerMethodField()
     display_name = serializers.SerializerMethodField()
+    profile_pic = serializers.SerializerMethodField()
     human_active = serializers.SerializerMethodField()
     bot_active = serializers.SerializerMethodField()
+
+    def get_profile_pic(self, obj) -> str | None:
+        meta = obj.metadata or {}
+        return meta.get("profile_pic") or meta.get("avatar_url") or None
 
     def get_human_active(self, obj) -> bool:
         # Populated from a batched Redis lookup passed in via serializer context

@@ -186,18 +186,26 @@ class SocialOAuthCallbackView(ShopScopedAPIView):
 
         # Automatically connect all authorized pages returned by Meta
         connections = []
+        conflicts = []
         for page in pages:
-            conn = upsert_social_connection(
-                shop_id=shop_id,
-                provider="META",
-                page_id=str(page.get("id")),
-                page_name=str(page.get("name")),
-                access_token=str(page.get("access_token")),
-                expires_in=60 * 24 * 60 * 60,
-            )
-            connections.append(conn)
+            try:
+                conn = upsert_social_connection(
+                    shop_id=shop_id,
+                    provider="META",
+                    page_id=str(page.get("id")),
+                    page_name=str(page.get("name")),
+                    access_token=str(page.get("access_token")),
+                    expires_in=60 * 24 * 60 * 60,
+                )
+                connections.append(conn)
+            except ValueError as exc:
+                conflicts.append(str(exc))
 
         cache.delete(f"meta_oauth_state:{shop_id}:{state}")
+
+        if not connections and conflicts:
+            return Response({"detail": conflicts[0]}, status=status.HTTP_400_BAD_REQUEST)
+
         return Response({
             "connected_count": len(connections),
             "connections": SocialConnectionSerializer(connections, many=True).data
@@ -216,15 +224,18 @@ class SocialConnectionListCreateView(ShopScopedAPIView):
         shop_id = self.require_shop_id(request)
         serializer = SocialConnectionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        connection = upsert_social_connection(
-            shop_id=shop_id,
-            provider=serializer.validated_data["provider"],
-            page_id=serializer.validated_data["page_id"],
-            page_name=serializer.validated_data["page_name"],
-            access_token=serializer.validated_data["access_token"],
-            expires_in=serializer.validated_data.get("expires_in"),
-        )
-        return Response(SocialConnectionSerializer(connection).data, status=status.HTTP_201_CREATED)
+        try:
+            connection = upsert_social_connection(
+                shop_id=shop_id,
+                provider=serializer.validated_data["provider"],
+                page_id=serializer.validated_data["page_id"],
+                page_name=serializer.validated_data["page_name"],
+                access_token=serializer.validated_data["access_token"],
+                expires_in=serializer.validated_data.get("expires_in"),
+            )
+            return Response(SocialConnectionSerializer(connection).data, status=status.HTTP_201_CREATED)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class SocialConnectionDisconnectView(ShopScopedAPIView):

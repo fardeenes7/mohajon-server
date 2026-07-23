@@ -173,26 +173,33 @@ def send_receipt_template(
     })
 
 
-def fetch_user_profile_name(*, psid: str, token: str) -> str | None:
+def fetch_user_profile_data(*, psid: str, token: str) -> dict | None:
     """
-    Look up a Messenger user's display name via the Graph User Profile API
-    (GET /{psid}?fields=first_name,last_name). Requires the page access token and
-    an active messaging thread with the user. Returns None on any failure so the
-    caller can fall back to the raw PSID — a missing name must never break intake.
+    Look up a Messenger user's display name and profile picture via the Graph User Profile API
+    (GET /{psid}?fields=first_name,last_name,profile_pic).
     """
     url = f"https://graph.facebook.com/{_GRAPH_API_VERSION}/{psid}"
     try:
         resp = requests.get(
             url,
-            params={"fields": "first_name,last_name", "access_token": token},
+            params={"fields": "first_name,last_name,profile_pic", "access_token": token},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
+        name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
+        return {
+            "name": name or None,
+            "profile_pic": data.get("profile_pic") or None,
+        }
     except Exception:  # noqa: BLE001
         return None
-    name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
-    return name or None
+
+
+def fetch_user_profile_name(*, psid: str, token: str) -> str | None:
+    """Look up a Messenger user's display name via Graph API."""
+    data = fetch_user_profile_data(psid=psid, token=token)
+    return data["name"] if data else None
 
 
 def reply_to_comment(*, comment_id: str, message: str, token: str) -> dict:

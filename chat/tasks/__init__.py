@@ -303,7 +303,7 @@ def fetch_conversation_display_name(self, *, shop_id: str, page_id: str, psid: s
     created. Best-effort: any failure just leaves the PSID showing.
     """
     from chat.models import Conversation, ChannelChoices
-    from chat.services.send_api import fetch_user_profile_name
+    from chat.services.send_api import fetch_user_profile_data
     from marketing.selectors import get_connection_by_page_id
 
     conn = get_connection_by_page_id(page_id)
@@ -311,9 +311,12 @@ def fetch_conversation_display_name(self, *, shop_id: str, page_id: str, psid: s
         logger.info("display-name: no usable connection for page=%s", page_id)
         return
 
-    name = fetch_user_profile_name(psid=psid, token=conn.access_token)
-    if not name:
+    profile = fetch_user_profile_data(psid=psid, token=conn.access_token)
+    if not profile:
         return
+
+    name = profile.get("name")
+    profile_pic = profile.get("profile_pic")
 
     from chat.services.realtime import publish_conversation_update
     conversations = Conversation.objects.filter(
@@ -321,11 +324,17 @@ def fetch_conversation_display_name(self, *, shop_id: str, page_id: str, psid: s
         channel_identity=psid, deleted_at__isnull=True,
     )
     for conversation in conversations:
-        if conversation.metadata.get("name") == name:
-            continue
-        conversation.metadata["name"] = name
-        conversation.save(update_fields=["metadata"])
-        publish_conversation_update(shop_id=shop_id, conversation=conversation)
+        updated = False
+        if name and conversation.metadata.get("name") != name:
+            conversation.metadata["name"] = name
+            updated = True
+        if profile_pic and conversation.metadata.get("profile_pic") != profile_pic:
+            conversation.metadata["profile_pic"] = profile_pic
+            updated = True
+
+        if updated:
+            conversation.save(update_fields=["metadata"])
+            publish_conversation_update(shop_id=shop_id, conversation=conversation)
 
 
 # ---------------------------------------------------------------------------

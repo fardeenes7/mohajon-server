@@ -29,21 +29,19 @@ def _guard_key(page_id: str, psid: str) -> str:
 
 
 def queue_display_name_sync(*, shop_id: str, page_id: str, psid: str, force: bool = False) -> None:
-    """
-    Enqueue a best-effort display-name resolution for (page_id, psid), unless it
-    was resolved recently. Safe to call on EVERY inbound event — the Redis guard
-    makes repeat calls cheap no-ops. `force=True` bypasses the guard (e.g. manual
-    backfill). Never raises: name resolution must not break message intake.
-    """
     if not page_id or not psid:
         return
     try:
         if not force:
-            r = get_redis_connection("default")
-            # SET NX: only the first caller within the TTL window wins the fetch.
-            won = r.set(_guard_key(page_id, psid), "1", nx=True, ex=_SYNC_TTL_SECONDS)
-            if not won:
-                return
+            from chat.models import Conversation, ChannelChoices
+            conv = Conversation.objects.filter(
+                shop_id=shop_id, channel=ChannelChoices.FACEBOOK, channel_identity=psid
+            ).first()
+            if conv and conv.metadata.get("name"):
+                r = get_redis_connection("default")
+                won = r.set(_guard_key(page_id, psid), "1", nx=True, ex=_SYNC_TTL_SECONDS)
+                if not won:
+                    return
 
         from chat.tasks import fetch_conversation_display_name
         fetch_conversation_display_name.delay(

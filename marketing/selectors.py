@@ -3,10 +3,11 @@ from __future__ import annotations
 from marketing.models import SocialConnection, ProductSocialPostLog
 
 def get_connection_by_page_id(page_id: str) -> SocialConnection | None:
-    try:
-        return SocialConnection.objects.get(page_id=page_id, deleted_at__isnull=True)
-    except SocialConnection.DoesNotExist:
-        return None
+    return SocialConnection.objects.filter(
+        page_id=str(page_id),
+        status="ACTIVE",
+        deleted_at__isnull=True,
+    ).order_by("-created_at").first()
 
 def list_social_connections(*, shop_id: str):
     return SocialConnection.objects.filter(

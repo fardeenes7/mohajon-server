@@ -29,6 +29,18 @@ def upsert_social_connection(
     access_token: str,
     expires_in: int | None,
 ):
+    # Check if page is already actively connected to a different shop
+    existing_other = SocialConnection.objects.filter(
+        page_id=str(page_id),
+        status=SocialConnectionStatus.ACTIVE,
+        deleted_at__isnull=True,
+    ).exclude(shop_id=shop_id).first()
+
+    if existing_other:
+        raise ValueError(
+            f"Facebook Page '{page_name}' is already connected to another Mohajon store. Please disconnect it from that store before connecting here."
+        )
+
     expires_at = timezone.now() + timedelta(seconds=expires_in) if expires_in else None
 
     connection, _ = SocialConnection.objects.update_or_create(
