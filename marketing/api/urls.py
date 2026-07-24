@@ -9,13 +9,8 @@ from .social_views import (
     SocialBulkPublishView,
     ProductSocialActivityView,
 )
-from .ad_views import MetaAdsViewSet
 
 urlpatterns = [
-    # Meta Ads (v0.9)
-    path('ads/available-accounts/', MetaAdsViewSet.as_view({'get': 'available_accounts'}), name='meta_ads_available_accounts'),
-    path('ads/link-account/', MetaAdsViewSet.as_view({'post': 'link_account'}), name='meta_ads_link_account'),
-
     # Public
     path('waitlist/', WaitlistCreateView.as_view(), name='waitlist_create'),
     
