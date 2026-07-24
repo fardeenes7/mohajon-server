@@ -162,5 +162,203 @@ def deduct_ai_credits(*, shop_id: str, credits: Decimal) -> Decimal:
 
 
 def has_sufficient_ai_credits(*, shop_id: str, minimum: Decimal = Decimal("0.01")) -> bool:
-    """Check if a shop has enough spendable (non-expired) credits."""
-    return available_credits(shop_id=shop_id) >= minimum
+    """Check if a shop has enough spendable (non-expired) credits.
+
+    Accounts for credits currently reserved by in-flight AI turns so
+    concurrent requests don't both pass the check and collectively overspend.
+    """
+    balance = available_credits(shop_id=shop_id)
+    reserved = _get_total_reserved(shop_id)
+    return (balance - reserved) >= minimum
+
+
+# ---------------------------------------------------------------------------
+# Credit reservation system — prevents quota race conditions across
+# concurrent AI turns for the same tenant.
+#
+# How it works (estimate-then-reconcile):
+#   1. Before entering the tool-call loop, `reserve_ai_credits` atomically
+#      checks that (balance - already_reserved) >= estimated_cost, then
+#      increments the reservation counter in Redis.
+#   2. After the loop, `reconcile_ai_credits` releases the reservation and
+#      lets `log_accumulated_usage` / `deduct_ai_credits` charge the real
+#      amount against the DB ledger.
+#   3. If the task crashes mid-loop, `release_ai_credits` in a `finally`
+#      block frees the reservation so credits aren't permanently locked.
+#
+# The Redis counter is an *optimistic limiter*, not the source of truth.
+# The DB ledger (AICreditLot) remains authoritative. A brief window where
+# balance appears as "reserved-but-unspent" is acceptable — it self-corrects
+# the moment reconciliation runs.
+# ---------------------------------------------------------------------------
+
+# Max consecutive function calls per AI turn (mirrors engine._MAX_TOOL_CALLS)
+_RESERVATION_MAX_TOOL_CALLS = 5
+
+# Conservative average tokens per tool-call iteration (prompt + completion).
+# This overestimates intentionally — unused reservation is released after the
+# turn. Adjust if real-world usage shows persistent over-reservation.
+_AVG_TOKENS_PER_ITERATION = 4000
+
+
+def _reservation_key(shop_id: str) -> str:
+    """Redis key tracking total in-flight credit reservations for a shop."""
+    return f"credits_reserved:{shop_id}"
+
+
+def _get_total_reserved(shop_id: str) -> Decimal:
+    """Read the current total reserved credits from Redis (non-blocking)."""
+    try:
+        from django_redis import get_redis_connection
+        r = get_redis_connection("default")
+        raw = r.get(_reservation_key(shop_id))
+        if raw is None:
+            return Decimal("0")
+        # Stored as integer hundredths of credits (e.g. 150 = 1.50 credits)
+        return (Decimal(int(raw)) / 100).quantize(_CREDIT_QUANT)
+    except Exception:
+        # Redis down — return 0 so the pre-check doesn't block everything.
+        return Decimal("0")
+
+
+def estimate_turn_credits(*, shop_id: str) -> Decimal:
+    """
+    Estimate a conservative credit ceiling for one AI turn.
+
+    Formula:
+        MAX_TOOL_CALLS × avg_tokens_per_iteration × (input_rate + output_rate) / 1M / USD_PER_CREDIT
+
+    This is an approximation, not exact accounting. It intentionally over-
+    estimates so the reservation acts as a safe ceiling. The unused portion
+    is released after the turn completes.
+
+    TODO: Future improvement — make this tenant-specific based on historical
+    average usage per turn, rather than a global constant.
+    """
+    from ai.services.ai_model_registry import resolve_ai_model
+    from ai.models import AIModelUsage
+
+    model = resolve_ai_model(usage=AIModelUsage.CHAT_COMPLETION)
+    input_rate = model.input_price_per_1m_tokens or Decimal("0.15")
+    output_rate = model.output_price_per_1m_tokens or Decimal("0.60")
+
+    total_tokens = _RESERVATION_MAX_TOOL_CALLS * _AVG_TOKENS_PER_ITERATION
+    # Half input, half output as a rough split
+    usd_cost = (
+        input_rate * (total_tokens // 2) / 1_000_000
+        + output_rate * (total_tokens // 2) / 1_000_000
+    )
+    credits = (usd_cost / USD_PER_CREDIT).quantize(_CREDIT_QUANT)
+    # Floor to at least 0.01 so we always reserve *something*
+    return max(credits, Decimal("0.01"))
+
+
+# Lua script for atomic check-and-reserve.
+# KEYS[1] = credits_reserved:{shop_id}
+# ARGV[1] = amount to reserve (integer hundredths)
+# ARGV[2] = available balance (integer hundredths) — passed in from Python
+#           after querying the DB ledger.
+# Returns 1 on success, 0 if reservation would exceed available balance.
+_RESERVE_LUA = """
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local to_reserve = tonumber(ARGV[1])
+local available = tonumber(ARGV[2])
+if (current + to_reserve) > available then
+    return 0
+end
+redis.call('INCRBY', KEYS[1], to_reserve)
+redis.call('EXPIRE', KEYS[1], 300)
+return 1
+"""
+
+
+def reserve_ai_credits(*, shop_id: str, estimated_credits: Decimal | None = None) -> Decimal:
+    """
+    Atomically reserve credits for an upcoming AI turn.
+
+    Returns the amount reserved on success.
+    Raises ``InsufficientCreditsError`` if the reservation would take the
+    tenant's effective balance (ledger minus already-reserved) negative.
+
+    If Redis is unavailable, falls through without reserving — the DB-level
+    ``deduct_ai_credits`` is still the authoritative safety net.
+    """
+    if estimated_credits is None:
+        estimated_credits = estimate_turn_credits(shop_id=shop_id)
+
+    estimated_credits = estimated_credits.quantize(_CREDIT_QUANT)
+    if estimated_credits <= 0:
+        return Decimal("0")
+
+    # Integer hundredths for Redis (avoids floating point)
+    amount_hundredths = int(estimated_credits * 100)
+    balance = available_credits(shop_id=shop_id)
+    balance_hundredths = int(balance * 100)
+
+    try:
+        from django_redis import get_redis_connection
+        r = get_redis_connection("default")
+        result = r.eval(_RESERVE_LUA, 1, _reservation_key(shop_id),
+                        amount_hundredths, balance_hundredths)
+        if result == 0:
+            raise InsufficientCreditsError(
+                f"Cannot reserve {estimated_credits} credits for shop {shop_id}: "
+                f"available={balance}, already_reserved={_get_total_reserved(shop_id)}"
+            )
+    except InsufficientCreditsError:
+        raise
+    except Exception as exc:
+        # Redis unavailable — log warning but don't block the turn.
+        # The DB-level deduct_ai_credits still enforces the floor.
+        logger.warning(
+            "Credit reservation Redis error for shop=%s (proceeding without reservation): %s",
+            shop_id, exc,
+        )
+        return Decimal("0")
+
+    return estimated_credits
+
+
+def reconcile_ai_credits(*, shop_id: str, reserved_credits: Decimal) -> None:
+    """
+    Release a credit reservation after the AI turn completes.
+
+    Called after ``log_accumulated_usage`` has written the actual usage to the
+    DB ledger. This simply decrements the Redis reservation counter by the
+    originally reserved amount — the real deduction already happened via
+    ``deduct_ai_credits``.
+    """
+    if reserved_credits <= 0:
+        return
+    amount_hundredths = int(reserved_credits.quantize(_CREDIT_QUANT) * 100)
+    try:
+        from django_redis import get_redis_connection
+        r = get_redis_connection("default")
+        r.decrby(_reservation_key(shop_id), amount_hundredths)
+        # Floor to zero — don't let counter go negative from rounding
+        raw = r.get(_reservation_key(shop_id))
+        if raw is not None and int(raw) < 0:
+            r.set(_reservation_key(shop_id), 0, ex=300)
+    except Exception as exc:
+        logger.warning(
+            "Credit reconciliation Redis error for shop=%s: %s (counter will self-expire)",
+            shop_id, exc,
+        )
+
+
+def release_ai_credits(*, shop_id: str, reserved_credits: Decimal) -> None:
+    """
+    Emergency release for crashed/failed AI turns.
+
+    Identical to ``reconcile_ai_credits`` — separated as a distinct function
+    for clarity in call sites (``finally`` blocks) and future audit logging.
+    A crashed turn produced no output, so no DB deduction happened; we just
+    need to free the reservation so the counter doesn't permanently lock
+    credits away from the tenant.
+    """
+    reconcile_ai_credits(shop_id=shop_id, reserved_credits=reserved_credits)
+
+
+class InsufficientCreditsError(Exception):
+    """Raised when a credit reservation cannot be fulfilled."""
+    pass

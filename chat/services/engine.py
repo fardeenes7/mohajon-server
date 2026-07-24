@@ -18,13 +18,20 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from typing import Any
 
 from django.db import transaction
 from django.utils import timezone
 
 from ai.models import AIModelUsage
-from ai.services.ai_credits import has_sufficient_ai_credits
+from ai.services.ai_credits import (
+    has_sufficient_ai_credits,
+    InsufficientCreditsError,
+    reconcile_ai_credits,
+    release_ai_credits,
+    reserve_ai_credits,
+)
 from ai.services.ai_gateway import AIGateway
 from chat.models import ChatMessage, MessageDirection
 from chat.selectors import message_list_for_psid
@@ -288,28 +295,48 @@ def run_ai_turn(
     page_id: str | None = None,
     context_window_size: int = 20,
     fallback_message: str | None = None,
+    inbound_texts: list[tuple[str, int]] | None = None,
 ) -> str:
     """
     Execute one AI turn:
-      1. Persist the inbound message.
+      1. Persist the inbound message(s).
       2. Load context (Redis → Postgres fallback).
-      3. Check credit balance.
+      3. Reserve credits (optimistic Redis-based limiter).
       4. Run OpenAI tool-call loop (max 5 calls).
-      5. Deduct credits.
+      5. Deduct credits + reconcile reservation.
       6. Persist outbound reply.
       7. Return the final text to send to the customer.
 
     On any failure, returns the fallback_message string.
+
+    When ``inbound_texts`` is provided (list of (text, timestamp) tuples from
+    the debounce flush), each message is persisted as a separate ChatMessage
+    row so the agent inbox shows the exact messages the customer sent, but the
+    AI sees them concatenated into one user turn. Token/credit accounting
+    treats this as a single AI turn.
     """
     import time
 
-    # 1. Persist inbound message
-    _persist_message(
-        shop_id=shop_id, channel=channel, channel_identity=channel_identity,
-        direction=MessageDirection.INBOUND,
-        text=inbound_text, timestamp=inbound_timestamp,
-        page_id=page_id,
-    )
+    # 1. Persist inbound message(s)
+    # When multiple batched messages arrive via debounce, persist each
+    # individually so the agent inbox timeline stays correct.
+    if inbound_texts:
+        for text, ts in inbound_texts:
+            _persist_message(
+                shop_id=shop_id, channel=channel, channel_identity=channel_identity,
+                direction=MessageDirection.INBOUND,
+                text=text, timestamp=ts, page_id=page_id,
+            )
+        # The combined text sent to the AI is a newline-joined concatenation
+        combined_inbound_text = "\n".join(text for text, _ in inbound_texts)
+    else:
+        _persist_message(
+            shop_id=shop_id, channel=channel, channel_identity=channel_identity,
+            direction=MessageDirection.INBOUND,
+            text=inbound_text, timestamp=inbound_timestamp,
+            page_id=page_id,
+        )
+        combined_inbound_text = inbound_text
 
     # 2. Load context
     ctx_messages = ctx_cache_get(page_id=page_id or channel, psid=channel_identity)
@@ -327,7 +354,7 @@ def run_ai_turn(
     ]
     for m in ctx_messages[-context_window_size:]:
         openai_messages.append({"role": m["role"], "content": m["content"]})
-    openai_messages.append({"role": "user", "content": inbound_text})
+    openai_messages.append({"role": "user", "content": combined_inbound_text})
 
     _DEFAULT_FALLBACK = "I'm having a little trouble right now. Our team will reach out shortly! 🙏"
 
@@ -341,8 +368,24 @@ def run_ai_turn(
         )
         return reply
 
-    # 3. Credit pre-check
+    # 3. Credit pre-check + reservation
     if not has_sufficient_ai_credits(shop_id=shop_id):
+        _handle_credit_exhaustion(shop_id=shop_id, page_id=page_id or channel, psid=channel_identity)
+        record_system_event(
+            shop_id=shop_id, channel=channel, channel_identity=channel_identity,
+            event="bot_paused_credits",
+            text="Bot paused — AI credits exhausted. A human should take over.",
+            page_id=page_id,
+        )
+        return _persist_fallback()
+
+    # Reserve credits upfront to prevent concurrent turns from overspending.
+    # The reservation is released in the finally block below regardless of
+    # whether the turn succeeds or crashes.
+    reserved_credits = Decimal("0")
+    try:
+        reserved_credits = reserve_ai_credits(shop_id=shop_id)
+    except InsufficientCreditsError:
         _handle_credit_exhaustion(shop_id=shop_id, page_id=page_id or channel, psid=channel_identity)
         record_system_event(
             shop_id=shop_id, channel=channel, channel_identity=channel_identity,
@@ -358,6 +401,7 @@ def run_ai_turn(
     total_output_tokens = 0
     tool_call_depth = 0
     final_reply = fallback_message or "I'm having a little trouble right now. Our team will reach out shortly! 🙏"
+    turn_succeeded = False
 
     try:
         while True:
@@ -412,6 +456,8 @@ def run_ai_turn(
                 final_reply = (msg.content or "").strip()
                 break
 
+        turn_succeeded = True
+
     except Exception as exc:
         logger.error("AI engine error shop=%s identity=%s: %s", shop_id, channel_identity, exc)
         _push_dlq_alert(shop_id=shop_id, reason=str(exc))
@@ -421,6 +467,13 @@ def run_ai_turn(
             event=event_key, text=event_label, page_id=page_id,
         )
         return _persist_fallback()
+    finally:
+        # Always release the credit reservation — whether the turn succeeded
+        # or crashed. On success, log_accumulated_usage below writes the real
+        # deduction to the DB ledger; on failure, no deduction happens and
+        # we just free the reservation.
+        if reserved_credits > 0:
+            release_ai_credits(shop_id=shop_id, reserved_credits=reserved_credits)
 
     # 5. Deduct credits + write audit log via gateway (single consolidated entry)
     try:
@@ -440,7 +493,7 @@ def run_ai_turn(
         text=final_reply, timestamp=out_ts,
         page_id=page_id,
     )
-    ctx_cache_append(page_id=page_id or channel, psid=channel_identity, role="user", content=inbound_text)
+    ctx_cache_append(page_id=page_id or channel, psid=channel_identity, role="user", content=combined_inbound_text)
     ctx_cache_append(page_id=page_id or channel, psid=channel_identity, role="assistant", content=final_reply)
 
     return final_reply

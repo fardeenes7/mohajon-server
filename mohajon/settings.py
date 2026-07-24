@@ -409,3 +409,10 @@ EMBEDDING_PROVIDER_API_KEY = env('EMBEDDING_PROVIDER_API_KEY', default='')
 # Explicit model name for the embedding provider (e.g. "google-ai-studio/gemini-embedding-2").
 # When blank, the gateway derives it from the registry model name automatically.
 EMBEDDING_PROVIDER_MODEL = env('EMBEDDING_PROVIDER_MODEL', default='')
+
+# ── Message Debouncing (v0.6 Chat) ──────────────────────────────────────────
+# Per-user debounce window in seconds. Rapid-fire messages within this window
+# are batched into a single AI turn to avoid duplicate replies and reduce
+# quota exposure. Configurable per-deployment.
+MESSAGE_DEBOUNCE_SECONDS = float(env('MESSAGE_DEBOUNCE_SECONDS', default='1.5'))
+

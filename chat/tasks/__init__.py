@@ -2,19 +2,37 @@
 Celery tasks for the messenger app.
 
 Tasks:
-  - process_inbound_message  — route a single webhook event through the
-                               greeting filter or AI engine
-  - embed_faq_entry          — generate pgvector embedding for a FAQEntry
-  - sweep_old_messages       — soft-delete ChatMessages older than 30 days
+  - process_inbound_message      — route a single webhook event through the
+                                   greeting filter or AI engine
+  - _flush_debounced_messages    — (internal) fire after debounce window to
+                                   batch rapid-fire messages into one AI turn
+  - embed_faq_entry              — generate pgvector embedding for a FAQEntry
+  - sweep_old_messages           — soft-delete ChatMessages older than 30 days
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 
 from celery import shared_task
+from django.conf import settings
+from django_redis import get_redis_connection
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Debounce Redis key helpers
+# ---------------------------------------------------------------------------
+
+def _debounce_queue_key(shop_id: str, psid: str) -> str:
+    return f"debounce:{shop_id}:{psid}"
+
+def _debounce_meta_key(shop_id: str, psid: str) -> str:
+    return f"debounce_meta:{shop_id}:{psid}"
+
+def _debounce_lock_key(shop_id: str, psid: str) -> str:
+    return f"debounce_lock:{shop_id}:{psid}"
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +186,115 @@ def process_inbound_message(
         )
         return
 
-    # AI engine turn
+    # ── AI engine turn (debounced) ──────────────────────────────────────────
+    # Instead of calling run_ai_turn immediately, queue the message into a
+    # Redis debounce buffer. A single delayed task fires after the debounce
+    # window closes and processes all accumulated messages as one AI turn.
+    _debounce_and_schedule_ai_turn(
+        shop_id=shop_id,
+        page_id=page_id,
+        psid=psid,
+        message_text=message_text,
+        timestamp=timestamp,
+        channel=channel,
+        settings_obj=settings_obj,
+    )
+
+
+# ---------------------------------------------------------------------------
+# DEBOUNCE — batch rapid-fire messages into one AI turn
+# ---------------------------------------------------------------------------
+
+def _debounce_and_schedule_ai_turn(
+    *,
+    shop_id: str,
+    page_id: str,
+    psid: str,
+    message_text: str,
+    timestamp: int,
+    channel: str,
+    settings_obj,
+) -> None:
+    """
+    Append message to a Redis debounce queue and (re)schedule a single
+    delayed flush task.
+
+    The debounce window is MESSAGE_DEBOUNCE_SECONDS (default 1.5s). If a
+    new message arrives before the window expires, the TTL resets and the
+    message is appended — no duplicate flush is scheduled.
+
+    If Redis is unavailable, falls back to immediate single-message processing
+    so messages are never dropped.
+    """
+    debounce_seconds = getattr(settings, "MESSAGE_DEBOUNCE_SECONDS", 1.5)
+    queue_key = _debounce_queue_key(shop_id, psid)
+    meta_key = _debounce_meta_key(shop_id, psid)
+    lock_key = _debounce_lock_key(shop_id, psid)
+
+    try:
+        from django_redis import get_redis_connection
+        r = get_redis_connection("default")
+    except Exception as exc:
+        # Redis unavailable — fail safe: process immediately as single-message
+        logger.warning(
+            "Debounce Redis unavailable (shop=%s psid=%s): %s — processing immediately.",
+            shop_id, psid, exc,
+        )
+        _process_single_message_immediately(
+            shop_id=shop_id, page_id=page_id, psid=psid,
+            message_text=message_text, timestamp=timestamp,
+            channel=channel, settings_obj=settings_obj,
+        )
+        return
+
+    # If an AI turn is actively running, the lock_key is held by the currently
+    # executing _flush_debounced_messages task. New messages will be appended
+    # to the queue below but won't acquire the lock. When the active turn
+    # finishes, it checks the queue and schedules a new flush for these messages.
+
+    # Append message to the debounce queue (RPUSH preserves arrival order)
+    entry = json.dumps({"text": message_text, "timestamp": timestamp})
+    r.rpush(queue_key, entry)
+    # Safety TTL so orphaned keys don't persist forever (300s to cover worst-case slow AI turn)
+    r.expire(queue_key, 300)
+
+    # Store metadata needed by the flush task (idempotent overwrite)
+    r.hset(meta_key, mapping={
+        "shop_id": shop_id,
+        "page_id": page_id,
+        "psid": psid,
+        "channel": channel,
+        "fallback_message": getattr(settings_obj, "messenger_fallback_message", "") or "" if settings_obj else "",
+        "context_window_size": str(getattr(settings_obj, "messenger_context_window_size", 20) if settings_obj else 20),
+    })
+    r.expire(meta_key, 300)
+
+    # Schedule the delayed flush task — use SETNX lock. We hold the lock for
+    # up to 300 seconds (covering a worst-case slow AI turn) so that concurrent messages
+    # queue up but do not spawn overlapping run_ai_turn executions.
+    acquired = r.set(lock_key, "1", nx=True, ex=300)
+    if acquired:
+        _flush_debounced_messages.apply_async(
+            kwargs={"shop_id": shop_id, "psid": psid},
+            countdown=debounce_seconds,
+            queue="messenger",
+        )
+
+
+def _process_single_message_immediately(
+    *,
+    shop_id: str,
+    page_id: str,
+    psid: str,
+    message_text: str,
+    timestamp: int,
+    channel: str,
+    settings_obj,
+) -> None:
+    """Fallback: process a single message without debouncing (Redis unavailable)."""
     from chat.services.engine import run_ai_turn
+    from chat.channels.registry import get_adapter
+
     fallback = getattr(settings_obj, "messenger_fallback_message", None) if settings_obj else None
     ctx_size = getattr(settings_obj, "messenger_context_window_size", 20) if settings_obj else 20
 
@@ -183,12 +308,133 @@ def process_inbound_message(
         context_window_size=ctx_size,
         fallback_message=fallback,
     )
-    # Route the reply through the channel adapter so a WHATSAPP turn replies via
-    # the WhatsApp Business API and a FACEBOOK turn via Messenger. Inbound identity
-    # persistence is already channel-correct via the `channel` param above.
     get_adapter(channel).send_text(
         shop_id=shop_id, channel_identity=psid, text=reply, page_id=page_id,
     )
+
+
+@shared_task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=2,
+    queue="messenger",
+    name="chat.tasks._flush_debounced_messages",
+)
+def _flush_debounced_messages(self, *, shop_id: str, psid: str) -> None:
+    """
+    Fire after the debounce window closes. Pop all accumulated messages
+    from the Redis queue and call run_ai_turn once with the batched texts.
+
+    If new messages arrived since the task was scheduled (extending the
+    debounce window), re-schedule self instead of processing — this
+    implements the TTL-reset behaviour.
+    """
+    from django_redis import get_redis_connection
+    from chat.services.engine import run_ai_turn
+    from chat.channels.registry import get_adapter
+
+    queue_key = _debounce_queue_key(shop_id, psid)
+    meta_key = _debounce_meta_key(shop_id, psid)
+    lock_key = _debounce_lock_key(shop_id, psid)
+    debounce_seconds = getattr(settings, "MESSAGE_DEBOUNCE_SECONDS", 1.5)
+
+    try:
+        r = get_redis_connection("default")
+    except Exception as exc:
+        logger.error(
+            "Flush debounced messages: Redis unavailable (shop=%s psid=%s): %s",
+            shop_id, psid, exc,
+        )
+        return
+
+    # Atomically pop ALL messages from the queue.
+    # Use a pipeline: LRANGE + DELETE in one round-trip.
+    pipe = r.pipeline()
+    pipe.lrange(queue_key, 0, -1)
+    pipe.delete(queue_key)
+    results = pipe.execute()
+    raw_messages = results[0]
+
+    if not raw_messages:
+        # Queue was empty — another flush already consumed it, or messages
+        # were dropped. Clean up metadata and exit.
+        r.delete(meta_key)
+        return
+
+    # Parse messages (arrival-order preserved by RPUSH)
+    messages: list[tuple[str, int]] = []
+    for raw in raw_messages:
+        entry = json.loads(raw if isinstance(raw, str) else raw.decode())
+        messages.append((entry["text"], entry["timestamp"]))
+
+    # Load metadata
+    meta_raw = r.hgetall(meta_key)
+    r.delete(meta_key)
+
+    if not meta_raw:
+        logger.error(
+            "Flush debounced messages: meta missing (shop=%s psid=%s) — dropping %d messages.",
+            shop_id, psid, len(messages),
+        )
+        return
+
+    # Decode metadata (redis returns bytes keys)
+    meta = {
+        (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+        for k, v in meta_raw.items()
+    }
+
+    page_id = meta.get("page_id", "")
+    channel = meta.get("channel", "FACEBOOK")
+    fallback = meta.get("fallback_message") or None
+    ctx_size = int(meta.get("context_window_size", "20"))
+
+    try:
+        if len(messages) == 1:
+            # Single message — use the standard path (no batching overhead)
+            text, ts = messages[0]
+            reply = run_ai_turn(
+                shop_id=shop_id,
+                channel=channel,
+                channel_identity=psid,
+                page_id=page_id,
+                inbound_text=text,
+                inbound_timestamp=ts,
+                context_window_size=ctx_size,
+                fallback_message=fallback,
+            )
+        else:
+            # Batched messages — pass all texts, persist each individually
+            reply = run_ai_turn(
+                shop_id=shop_id,
+                channel=channel,
+                channel_identity=psid,
+                page_id=page_id,
+                inbound_text=messages[0][0],  # required param, but inbound_texts takes precedence
+                inbound_timestamp=messages[0][1],
+                inbound_texts=messages,
+                context_window_size=ctx_size,
+                fallback_message=fallback,
+            )
+
+        get_adapter(channel).send_text(
+            shop_id=shop_id, channel_identity=psid, text=reply, page_id=page_id,
+        )
+    finally:
+        # Clear the scheduling lock after the turn finishes
+        r.delete(lock_key)
+
+    # Check if new messages arrived during the turn — if so, they are
+    # sitting in the queue. Schedule a new flush for them.
+    pending = r.llen(queue_key)
+    if pending > 0:
+        acquired = r.set(lock_key, "1", nx=True, ex=300)
+        if acquired:
+            _flush_debounced_messages.apply_async(
+                kwargs={"shop_id": shop_id, "psid": psid},
+                countdown=debounce_seconds,
+                queue="messenger",
+            )
 
 
 def _handle_postback(
