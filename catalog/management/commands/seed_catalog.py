@@ -841,10 +841,13 @@ class Command(BaseCommand):
             if clear_existing:
                 from django.utils import timezone
                 now = timezone.now()
+                from catalog.models import ProductVariant, StockRecord
                 deleted_prods = Product.objects.filter(shop=shop, deleted_at__isnull=True).update(deleted_at=now)
+                deleted_vars = ProductVariant.objects.filter(shop=shop, deleted_at__isnull=True).update(deleted_at=now)
+                deleted_stocks = StockRecord.objects.filter(shop=shop, deleted_at__isnull=True).update(deleted_at=now)
                 deleted_cats = Category.objects.filter(shop=shop, deleted_at__isnull=True).update(deleted_at=now)
                 self.stdout.write(
-                    self.style.WARNING(f"Cleared existing catalog data: {deleted_prods} products, {deleted_cats} categories.")
+                    self.style.WARNING(f"Cleared existing catalog data: {deleted_prods} products, {deleted_vars} variants, {deleted_cats} categories.")
                 )
 
             total_products_created = 0
@@ -855,16 +858,29 @@ class Command(BaseCommand):
                 cat_name = cat_data["category"]
                 cat_slug = slugify(cat_name)
                 
-                category, cat_created = Category.objects.get_or_create(
-                    shop=shop,
-                    slug=cat_slug,
-                    defaults={
-                        "tenant_id": shop.id,
-                        "name": cat_name,
-                        "sort_order": cat_sort,
-                        "is_active": True,
-                    },
-                )
+                category = Category.objects.filter(shop=shop, slug=cat_slug, deleted_at__isnull=True).first()
+                if category:
+                    cat_created = False
+                else:
+                    # Check if soft-deleted category exists and restore it, or create a new one
+                    category = Category.objects.filter(shop=shop, slug=cat_slug).first()
+                    if category:
+                        category.deleted_at = None
+                        category.name = cat_name
+                        category.sort_order = cat_sort
+                        category.is_active = True
+                        category.save()
+                        cat_created = True
+                    else:
+                        category = Category.objects.create(
+                            shop=shop,
+                            tenant_id=shop.id,
+                            name=cat_name,
+                            slug=cat_slug,
+                            sort_order=cat_sort,
+                            is_active=True,
+                        )
+                        cat_created = True
                 if cat_created:
                     total_categories_created += 1
 
@@ -872,16 +888,25 @@ class Command(BaseCommand):
                     prod_name = p_data["name"]
                     prod_slug = slugify(prod_name)
 
-                    # Ensure unique product slug per shop if collision happens
+                    # Ensure unique product slug per shop if collision happens (checking all records including soft-deleted ones)
                     base_slug = prod_slug
                     counter = 1
-                    while Product.objects.filter(shop=shop, slug=prod_slug, deleted_at__isnull=True).exists():
+                    while Product.objects.filter(shop=shop, slug=prod_slug).exists():
                         prod_slug = f"{base_slug}-{counter}"
                         counter += 1
 
                     sku = p_data.get("sku", "")
                     if not sku:
-                        sku = f"SKU-{cat_sort:02d}{prod_sort:02d}-{random.randint(100, 999)}"
+                        sku = f"SKU-{cat_sort:02d}{prod_sort:02d}-{random.randint(1000, 9999)}"
+                    else:
+                        sku = f"{sku}--{random.randint(1000, 9999)}"
+
+                    # Ensure unique product SKU per shop
+                    base_prod_sku = sku
+                    p_counter = 1
+                    while Product.objects.filter(shop=shop, sku=sku).exists():
+                        sku = f"{base_prod_sku}-{p_counter}"
+                        p_counter += 1
 
                     product = Product.objects.create(
                         shop=shop,
@@ -906,6 +931,12 @@ class Command(BaseCommand):
                     if variants_list:
                         for v_idx, v_data in enumerate(variants_list, start=1):
                             v_sku = v_data["sku"]
+                            base_v_sku = v_sku
+                            v_counter = 1
+                            while ProductVariant.objects.filter(shop=shop, sku=v_sku, deleted_at__isnull=True).exists():
+                                v_sku = f"{base_v_sku}-{v_counter}"
+                                v_counter += 1
+
                             variant = ProductVariant.objects.create(
                                 product=product,
                                 shop=shop,
@@ -931,6 +962,12 @@ class Command(BaseCommand):
                     else:
                         # Single variant representation for products without option variants
                         single_sku = f"{sku}-MAIN"
+                        base_s_sku = single_sku
+                        s_counter = 1
+                        while ProductVariant.objects.filter(shop=shop, sku=single_sku, deleted_at__isnull=True).exists():
+                            single_sku = f"{base_s_sku}-{s_counter}"
+                            s_counter += 1
+
                         stock_qty = p_data.get("stock_single", 50)
                         variant = ProductVariant.objects.create(
                             product=product,

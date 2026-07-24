@@ -40,6 +40,9 @@ class AIGateway:
     """
 
     _OPENAI_BASE_URL = "https://ai-gateway.vercel.sh/v1"
+    # External embedding provider (OpenAI-compatible endpoint) used as the primary
+    # embedding route.  Configured via EMBEDDING_PROVIDER_URL + EMBEDDING_PROVIDER_API_KEY.
+    # Falls back to the Vercel AI gateway when not configured or on failure.
 
     def __init__(self, shop_id: str, reference_id: str | None = None):
         self.shop_id = shop_id
@@ -64,6 +67,26 @@ class AIGateway:
                 # TODO: Add Anthropic, Stability, etc.
                 raise ValueError(f"Unsupported AI provider: {provider}")
         return self._client_cache[provider]
+
+    def _get_embedding_provider_client(self) -> Any | None:
+        """
+        Lazy-initialize the external embedding provider client.
+        Returns None when EMBEDDING_PROVIDER_URL is not configured, which
+        gracefully disables the provider so dev/test environments work without
+        extra credentials.
+        """
+        _KEY = "__embedding_provider"
+        if _KEY not in self._client_cache:
+            url = getattr(settings, "EMBEDDING_PROVIDER_URL", "")
+            key = getattr(settings, "EMBEDDING_PROVIDER_API_KEY", "")
+            if url and key:
+                self._client_cache[_KEY] = OpenAI(
+                    api_key=key,
+                    base_url=url,
+                )
+            else:
+                self._client_cache[_KEY] = None
+        return self._client_cache["__embedding_provider"]
 
     def call_chat_completion(
         self, 
@@ -288,31 +311,49 @@ class AIGateway:
         """
         Generate embeddings for a piece of text.
         Vector creation is FREE and does NOT deduct AI credits.
+
+        Resolution order:
+          1. Embedding provider (EMBEDDING_PROVIDER_URL / EMBEDDING_PROVIDER_API_KEY).
+             The registry model name (e.g. "google/gemini-embedding-2") is translated to
+             the provider's slug convention: "google/" → "google-ai-studio/".
+          2. Vercel AI gateway — used as the fallback when the provider is not
+             configured or the call fails. Uses the namespaced model id as-is.
         """
         model_config = resolve_ai_model(usage=AIModelUsage.EMBEDDING)
-        client = self._get_client(model_config.provider)
 
-        try:
+        # Resolve the model name for the embedding provider.
+        # EMBEDDING_PROVIDER_MODEL takes priority — set it explicitly when the
+        # provider's naming convention differs from the registry (e.g. a different
+        # provider slug prefix).  When blank, we derive it automatically from the
+        # registry model name by swapping the Vercel-style "google/" prefix for
+        # the Cloudflare/google-ai-studio slug prefix "google-ai-studio/".
+        _provider_model_name = (
+            getattr(settings, "EMBEDDING_PROVIDER_MODEL", "")
+            or (
+                "google-ai-studio/" + model_config.model_name.removeprefix("google/")
+                if model_config.model_name.startswith("google/")
+                else model_config.model_name
+            )
+        )
+
+        def _do_embed(client: Any, model_name: str) -> list[float]:
             response = client.embeddings.create(
-                model=model_config.model_name,
+                model=model_name,
                 input=text,
                 **kwargs
             )
-            
-            # Handle credits
+
+            # Audit log (fire-and-forget, no credit deduction for embeddings)
             usage = response.usage
             if usage:
-                # text-embedding-3-small is usually $0.02 / 1M tokens
                 rate = model_config.input_price_per_1m_tokens or Decimal("0.02")
                 from ai.services.ai_credits import calculate_credits
-                
                 _, usd_cost = calculate_credits(
                     model_input_rate=rate,
                     model_output_rate=Decimal("0"),
                     input_tokens=usage.prompt_tokens,
                     output_tokens=0
                 )
-                
                 self._log_usage(
                     usage_type=AIModelUsage.EMBEDDING,
                     model_config=model_config,
@@ -324,9 +365,41 @@ class AIGateway:
 
             return response.data[0].embedding
 
-        except Exception as e:
-            logger.error("AI Gateway Embedding Error (shop=%s): %s", self.shop_id, e)
-            raise
+        # ── 1. Embedding provider (primary) ───────────────────────────────────
+        provider_client = self._get_embedding_provider_client()
+        if provider_client is not None:
+            try:
+                return _do_embed(provider_client, _provider_model_name)
+            except Exception as provider_exc:
+                logger.warning(
+                    "Embedding provider failed (shop=%s, model=%s): %s — falling back to AI gateway.",
+                    self.shop_id, _provider_model_name, provider_exc,
+                )
+
+        # ── 2. Vercel AI gateway (fallback) ───────────────────────────────────
+        gateway_client = self._get_client(model_config.provider)
+        try:
+            result = _do_embed(gateway_client, model_config.model_name)
+            if provider_client is not None:
+                # Only log as fallback when provider was attempted first
+                logger.info(
+                    "Embedding (shop=%s): AI gateway fallback succeeded (model=%s).",
+                    self.shop_id, model_config.model_name,
+                )
+            return result
+        except Exception as gateway_exc:
+            if provider_client is not None:
+                logger.error(
+                    "Embedding Error (shop=%s): both embedding provider and AI gateway failed. "
+                    "Provider: %s | Gateway: %s",
+                    self.shop_id, provider_exc, gateway_exc,
+                )
+            else:
+                logger.error(
+                    "Embedding Error (shop=%s): AI gateway failed (no provider configured): %s",
+                    self.shop_id, gateway_exc,
+                )
+            raise gateway_exc
 
     def _log_usage(
         self,

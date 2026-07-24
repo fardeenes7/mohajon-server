@@ -397,5 +397,15 @@ META_APP_SECRET = env('META_APP_SECRET', default='')
 META_OAUTH_REDIRECT_URI = env('META_OAUTH_REDIRECT_URI', default='')
 META_WEBHOOK_VERIFY_TOKEN = env('META_WEBHOOK_VERIFY_TOKEN', default='mohajon_webhook_verify')
 
-# ── OpenAI (v0.6 AI Chatbot) ─────────────────────────────────────────────────
+# ── OpenAI / AI Gateway (v0.6 AI Chatbot) ───────────────────────────────────
+# Primary gateway: Vercel AI gateway (serves both OpenAI and Google models)
 OPENAI_API_KEY = env('OPENAI_API_KEY', default='')
+
+# Embedding provider — OpenAI-compatible endpoint used as the primary route for
+# generating embeddings.  Falls back to the Vercel AI gateway on failure.
+# URL format (Cloudflare AI Gateway): https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_slug>/compat
+EMBEDDING_PROVIDER_URL = env('EMBEDDING_PROVIDER_URL', default='')
+EMBEDDING_PROVIDER_API_KEY = env('EMBEDDING_PROVIDER_API_KEY', default='')
+# Explicit model name for the embedding provider (e.g. "google-ai-studio/gemini-embedding-2").
+# When blank, the gateway derives it from the registry model name automatically.
+EMBEDDING_PROVIDER_MODEL = env('EMBEDDING_PROVIDER_MODEL', default='')

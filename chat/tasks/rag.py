@@ -9,9 +9,18 @@ from ai.services import AIGateway
 logger = logging.getLogger(__name__)
 
 
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Helper to detect 429 rate limit errors from OpenAI SDK / Gateway."""
+    from openai import RateLimitError
+    if isinstance(exc, RateLimitError):
+        return True
+    exc_str = str(exc)
+    return "429" in exc_str or "rate_limit_exceeded" in exc_str or "rate-limited" in exc_str
+
+
 @shared_task(
     bind=True,
-    max_retries=3,
+    max_retries=5,
     default_retry_delay=10,
     queue="ai_rag",
     name="chat.tasks.embed_faq_entry",
@@ -47,15 +56,26 @@ def embed_faq_entry(self, *, faq_entry_id: str) -> None:
         entry.save(update_fields=["embedding", "vector_status", "updated_at"])
         logger.info("Embedded FAQEntry %s successfully.", faq_entry_id)
     except Exception as exc:
-        logger.error("Embedding failed for FAQEntry %s: %s", faq_entry_id, exc)
-        entry.vector_status = VectorStatus.FAILED
-        entry.save(update_fields=["vector_status", "updated_at"])
-        self.retry(exc=exc)
+        if _is_rate_limit_error(exc):
+            retry_delay = 60 * (2 ** self.request.retries)  # 60s, 120s, 240s...
+            logger.warning(
+                "Embedding rate-limited (429) for FAQEntry %s. Backing off for %ds (retry %d/%d).",
+                faq_entry_id, retry_delay, self.request.retries + 1, self.max_retries
+            )
+            # Keep status as PENDING so it doesn't show FAILED prematurely during rate-limit backoff
+            entry.vector_status = VectorStatus.PENDING
+            entry.save(update_fields=["vector_status", "updated_at"])
+            self.retry(exc=exc, countdown=retry_delay)
+        else:
+            logger.error("Embedding failed for FAQEntry %s: %s", faq_entry_id, exc)
+            entry.vector_status = VectorStatus.FAILED
+            entry.save(update_fields=["vector_status", "updated_at"])
+            self.retry(exc=exc)
 
 
 @shared_task(
     bind=True,
-    max_retries=3,
+    max_retries=5,
     default_retry_delay=10,
     queue="ai_rag",
     name="chat.tasks.embed_product_specs",
@@ -97,9 +117,19 @@ def embed_product_specs(self, *, product_id: str) -> None:
         update_product_embedding(product_id=product_id, vector=vector, status=VectorStatus.CREATED)
         logger.info("Embedded Product %s successfully.", product_id)
     except Exception as exc:
-        logger.error("Embedding failed for Product %s: %s", product_id, exc)
-        update_product_embedding(product_id=product_id, vector=None, status=VectorStatus.FAILED)
-        self.retry(exc=exc)
+        if _is_rate_limit_error(exc):
+            retry_delay = 60 * (2 ** self.request.retries)  # 60s, 120s, 240s...
+            logger.warning(
+                "Embedding rate-limited (429) for Product %s. Backing off for %ds (retry %d/%d).",
+                product_id, retry_delay, self.request.retries + 1, self.max_retries
+            )
+            # Keep status as PENDING so it doesn't show FAILED prematurely during rate-limit backoff
+            update_product_embedding(product_id=product_id, vector=None, status=VectorStatus.PENDING)
+            self.retry(exc=exc, countdown=retry_delay)
+        else:
+            logger.error("Embedding failed for Product %s: %s", product_id, exc)
+            update_product_embedding(product_id=product_id, vector=None, status=VectorStatus.FAILED)
+            self.retry(exc=exc)
 
 
 @shared_task(
