@@ -327,14 +327,7 @@ class AIGateway:
         # provider slug prefix).  When blank, we derive it automatically from the
         # registry model name by swapping the Vercel-style "google/" prefix for
         # the Cloudflare/google-ai-studio slug prefix "google-ai-studio/".
-        _provider_model_name = (
-            getattr(settings, "EMBEDDING_PROVIDER_MODEL", "")
-            or (
-                "google-ai-studio/" + model_config.model_name.removeprefix("google/")
-                if model_config.model_name.startswith("google/")
-                else model_config.model_name
-            )
-        )
+        _provider_model_name = getattr(settings, "EMBEDDING_PROVIDER_MODEL", model_config.model_name)
 
         def _do_embed(client: Any, model_name: str) -> list[float]:
             kwargs.setdefault("encoding_format", "float")
