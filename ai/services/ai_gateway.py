@@ -337,6 +337,7 @@ class AIGateway:
         )
 
         def _do_embed(client: Any, model_name: str) -> list[float]:
+            kwargs.setdefault("encoding_format", "float")
             response = client.embeddings.create(
                 model=model_name,
                 input=text,
@@ -367,13 +368,15 @@ class AIGateway:
 
         # ── 1. Embedding provider (primary) ───────────────────────────────────
         provider_client = self._get_embedding_provider_client()
+        _provider_exc: Exception | None = None  # survives the except block (Python 3 deletes `as` vars on exit)
         if provider_client is not None:
             try:
                 return _do_embed(provider_client, _provider_model_name)
-            except Exception as provider_exc:
+            except Exception as exc:
+                _provider_exc = exc  # capture before `exc` is deleted
                 logger.warning(
                     "Embedding provider failed (shop=%s, model=%s): %s — falling back to AI gateway.",
-                    self.shop_id, _provider_model_name, provider_exc,
+                    self.shop_id, _provider_model_name, _provider_exc,
                 )
 
         # ── 2. Vercel AI gateway (fallback) ───────────────────────────────────
@@ -392,7 +395,7 @@ class AIGateway:
                 logger.error(
                     "Embedding Error (shop=%s): both embedding provider and AI gateway failed. "
                     "Provider: %s | Gateway: %s",
-                    self.shop_id, provider_exc, gateway_exc,
+                    self.shop_id, _provider_exc, gateway_exc,
                 )
             else:
                 logger.error(

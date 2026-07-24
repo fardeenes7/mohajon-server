@@ -412,7 +412,7 @@ class ChatRAGSignalsTestCase(TestCase):
         )
         from catalog.services import update_product_embedding
 
-        update_product_embedding(product_id=str(product.id), vector=[0.1]*1536, status="CREATED")
+        update_product_embedding(product_id=str(product.id), vector=[0.1]*3072, status="CREATED")
         product.refresh_from_db()
         self.assertEqual(product.vector_status, "CREATED")
         self.assertIsNotNone(product.embedding)

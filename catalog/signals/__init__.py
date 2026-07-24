@@ -46,14 +46,21 @@ def update_product_search_vector(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender="catalog.Product")
-def emit_product_updated(sender, instance, **kwargs):
+def emit_product_updated(sender, instance, update_fields=None, **kwargs):
     """
     Emit product_updated signal when a product is saved.
+    update_fields is forwarded so receivers can decide whether the change
+    is meaningful for their purpose (e.g. skip pure vector-status bookkeeping).
     """
     product_id = str(instance.pk)
+    _update_fields = frozenset(update_fields) if update_fields else None
 
     def _emit():
-        product_updated.send(sender=sender, product_id=product_id)
+        product_updated.send(
+            sender=sender,
+            product_id=product_id,
+            update_fields=_update_fields,
+        )
 
     transaction.on_commit(_emit)
 

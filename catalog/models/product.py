@@ -95,8 +95,8 @@ class Product(TenantModel):
     search_vector = SearchVectorField(null=True, blank=True)
     
     # ── Semantic embedding for RAG (populated by Celery) ───────────────────
-    # 1536-dim vector from text-embedding-3-small
-    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    # 3072-dim vector from google/gemini-embedding-2
+    embedding = VectorField(dimensions=3072, null=True, blank=True)
     vector_status = models.CharField(
         max_length=20,
         choices=VectorStatus.choices,

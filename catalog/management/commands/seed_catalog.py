@@ -841,7 +841,6 @@ class Command(BaseCommand):
             if clear_existing:
                 from django.utils import timezone
                 now = timezone.now()
-                from catalog.models import ProductVariant, StockRecord
                 deleted_prods = Product.objects.filter(shop=shop, deleted_at__isnull=True).update(deleted_at=now)
                 deleted_vars = ProductVariant.objects.filter(shop=shop, deleted_at__isnull=True).update(deleted_at=now)
                 deleted_stocks = StockRecord.objects.filter(shop=shop, deleted_at__isnull=True).update(deleted_at=now)

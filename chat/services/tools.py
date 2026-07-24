@@ -475,7 +475,7 @@ def _search_faq(*, shop_id: str, query: str) -> dict:
     from pgvector.django import CosineDistance
 
     gateway = AIGateway(shop_id)
-    query_vector = gateway.call_embedding(text=query)
+    query_vector = gateway.call_embedding(text=query, dimensions=3072)
 
     # 1. Search Policies & FAQ
     faq_results = (

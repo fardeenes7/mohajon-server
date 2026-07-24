@@ -125,7 +125,7 @@ class FAQEntry(TenantModel):
     )
     question = models.TextField()
     answer = models.TextField()
-    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding = VectorField(dimensions=3072, null=True, blank=True)
     vector_status = models.CharField(
         max_length=20,
         choices=VectorStatus.choices,
