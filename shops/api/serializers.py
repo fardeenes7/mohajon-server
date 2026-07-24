@@ -28,8 +28,9 @@ class ShopSettingsSerializer(serializers.ModelSerializer):
             "show_stock_count", "enable_product_reviews",
             "tax_calculation_base", "discount_application",
             "messenger_greeting_keywords", "notification_targets",
+            "ai_credit_balance",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "ai_credit_balance"]
 
 class StoreThemeSerializer(serializers.ModelSerializer):
     class Meta:

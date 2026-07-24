@@ -3,7 +3,7 @@ from billing.models import (
     ShopSubscription, PaymentGatewayConfig, PaymentMethod, 
     MerchantAPIToken, OutboundWebhook, AICreditPackage, AICreditTopUp
 )
-from ai.models import AIUsageLog
+from ai.models import AIUsageLog, AICreditLot
 
 class AICreditPackageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -16,6 +16,18 @@ class AICreditTopUpSerializer(serializers.ModelSerializer):
         fields = [
             "id", "credits_purchased", "amount_paid_bdt", "status", 
             "expires_at", "is_expired", "created_at"
+        ]
+        read_only_fields = fields
+
+class AICreditLotSerializer(serializers.ModelSerializer):
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    
+    class Meta:
+        model = AICreditLot
+        fields = [
+            "id", "category", "category_display", "credits_granted", 
+            "credits_remaining", "expires_at", "is_exhausted", 
+            "is_expired", "created_at"
         ]
         read_only_fields = fields
 

@@ -9,14 +9,32 @@ from billing.models import (
     ShopSubscription, PaymentGatewayConfig, PaymentMethod, 
     MerchantAPIToken, OutboundWebhook, AICreditPackage, AICreditTopUp
 )
-from ai.models import AIUsageLog
+from ai.models import AIUsageLog, AICreditLot
 from billing.api.serializers import (
     ShopSubscriptionSerializer, PaymentGatewayConfigSerializer, PaymentMethodSerializer,
     MerchantAPITokenSerializer, OutboundWebhookSerializer, AICreditPackageSerializer,
-    AICreditTopUpSerializer, AIUsageLogSerializer
+    AICreditTopUpSerializer, AIUsageLogSerializer, AICreditLotSerializer
 )
 from billing.services.ai_credits import AICreditService
 # ... other imports ...
+
+class AICreditLotViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = AICreditLotSerializer
+
+    def get_queryset(self):
+        shop_id = ShopDetailView()._resolve_shop_id(self.request)
+        qs = AICreditLot.objects.filter(shop_id=shop_id)
+        
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        
+        if start_date:
+            qs = qs.filter(created_at__date__gte=start_date)
+        if end_date:
+            qs = qs.filter(created_at__date__lte=end_date)
+            
+        return qs.order_by('-created_at')
 
 class AICreditTopUpViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
@@ -24,7 +42,17 @@ class AICreditTopUpViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         shop_id = ShopDetailView()._resolve_shop_id(self.request)
-        return AICreditTopUp.objects.filter(shop_id=shop_id, deleted_at__isnull=True)
+        qs = AICreditTopUp.objects.filter(shop_id=shop_id, deleted_at__isnull=True)
+        
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        
+        if start_date:
+            qs = qs.filter(created_at__date__gte=start_date)
+        if end_date:
+            qs = qs.filter(created_at__date__lte=end_date)
+            
+        return qs.order_by('-created_at')
 
     @action(detail=False, methods=['post'], url_path='initiate')
     def initiate(self, request):
@@ -226,4 +254,14 @@ class AIUsageLogViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         shop_id = ShopDetailView()._resolve_shop_id(self.request)
-        return AIUsageLog.objects.filter(shop_id=shop_id).order_by('-created_at')
+        qs = AIUsageLog.objects.filter(shop_id=shop_id)
+        
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        
+        if start_date:
+            qs = qs.filter(created_at__date__gte=start_date)
+        if end_date:
+            qs = qs.filter(created_at__date__lte=end_date)
+            
+        return qs.order_by('-created_at')
