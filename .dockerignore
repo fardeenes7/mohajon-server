@@ -7,7 +7,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
-media/
+# NOTE: do NOT ignore "media/" — that's the Django app, not uploaded files.
+# User uploads live in mediafiles/ (below), which is what needs excluding.
 staticfiles/
 mediafiles/
 .venv/

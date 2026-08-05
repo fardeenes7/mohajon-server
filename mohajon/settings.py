@@ -142,15 +142,40 @@ DATABASES = {
     'default': {
         **env.db('DATABASE_URL', default='postgres://mohajon:mohajon_password@localhost:5432/mohajon'),
         'CONN_MAX_AGE': env.int('CONN_MAX_AGE', default=60),
+        'CONN_HEALTH_CHECKS': env.bool('CONN_HEALTH_CHECKS', default=True),
     }
 }
 
+# psycopg3's built-in connection pool (Django 5.0+). Replaces the PgBouncer
+# sidecar we used to run in front of Postgres — the pool lives in-process, so
+# there's no extra hop and no transaction-mode caveats (server-side cursors
+# work normally).
+#
+# Django raises ImproperlyConfigured("Pooling doesn't support persistent
+# connections.") unless CONN_MAX_AGE is 0 — the pool itself keeps connections
+# alive, so per-request persistence would be redundant. Both are therefore
+# forced here rather than left to the environment.
+#
+# Sizing: max_size is per-process, and gunicorn/celery each fork several
+# workers, so total connections ≈ processes × max_size. Keep the product under
+# the managed Postgres connection limit.
+DB_POOL_ENABLED = env.bool('DB_POOL_ENABLED', default=False)
+
+if DB_POOL_ENABLED and not IS_TESTING:
+    DATABASES['default']['CONN_MAX_AGE'] = 0
+    DATABASES['default'].setdefault('OPTIONS', {})
+    DATABASES['default']['OPTIONS']['pool'] = {
+        'min_size': env.int('DB_POOL_MIN_SIZE', default=2),
+        'max_size': env.int('DB_POOL_MAX_SIZE', default=10),
+        # Fail fast instead of hanging a request when the pool is saturated.
+        'timeout': env.int('DB_POOL_TIMEOUT', default=10),
+        # Recycle connections periodically so a long-lived process doesn't hold
+        # a stale server connection forever.
+        'max_lifetime': env.int('DB_POOL_MAX_LIFETIME', default=1800),
+    }
+
 if IS_TESTING:
     DATABASES['default']['ENGINE'] = 'django.db.backends.postgresql'
-    # Bypass PgBouncer for tests to allow creating/connecting to test DBs
-    if 'pgbouncer' in DATABASES['default'].get('HOST', ''):
-        DATABASES['default']['HOST'] = 'db'
-        DATABASES['default']['PORT'] = '5432'
 else:
     DATABASES['default']['ENGINE'] = 'django_zero_downtime_migrations.backends.postgres'
 

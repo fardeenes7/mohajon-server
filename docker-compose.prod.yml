@@ -7,109 +7,24 @@
 #
 # Key differences from dev:
 #   - Source code baked into the image (Dockerfile prod target) — no bind mounts
-#   - PgBouncer in front of Postgres (transaction-mode connection pooling)
-#   - CONN_MAX_AGE must be "0" with PgBouncer transaction mode — persistent
-#     connections cause pool exhaustion and FATAL: connection errors
-#   - No host-exposed ports for db/redis/pgbouncer (internal network only)
+#   - Pre-built images from GHCR (no local build step)
+#   - Managed Postgres and Redis via Coolify (not in compose)
+#   - psycopg3 in-process connection pooling (replaces the PgBouncer sidecar).
+#     Pooling requires CONN_MAX_AGE=0 — the pool holds connections, not Django.
+#     Total connections ≈ (gunicorn/celery processes) × DB_POOL_MAX_SIZE;
+#     keep that product below the managed Postgres connection limit.
 #   - restart: unless-stopped on all services
 #   - Memory limits sized for a budget 2-4 vCPU / 4-8 GB VPS
 #   - Two consolidated Celery workers (not six) — see MOHAJON.md for rationale
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
-    # ── Database ─────────────────────────────────────────────────────────────
-    db:
-        image: pgvector/pgvector:pg16-alpine
-        restart: unless-stopped
-        environment:
-            POSTGRES_USER: ${POSTGRES_USER}
-            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-            POSTGRES_DB: ${POSTGRES_DB}
-            APP_DB_USER: ${APP_DB_USER}
-            APP_DB_PASSWORD: ${APP_DB_PASSWORD}
-            PGBOUNCER_DB_USER: ${PGBOUNCER_DB_USER}
-            PGBOUNCER_DB_PASSWORD: ${PGBOUNCER_DB_PASSWORD}
-        volumes:
-            - postgres_data:/var/lib/postgresql/data
-            - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
-        # No ports exposed — internal network only
-        healthcheck:
-            test:
-                [
-                    "CMD-SHELL",
-                    "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
-                ]
-            interval: 10s
-            timeout: 5s
-            retries: 6
-            start_period: 30s
-        deploy:
-            resources:
-                limits:
-                    memory: 1g
-
-    # ── PgBouncer (connection pooler) ─────────────────────────────────────────
-    # Transaction-mode pool. CONN_MAX_AGE must be 0 in all Django services.
-    # Bitnami image manages its own config and userlist from env vars — no
-    # custom entrypoint or pgbouncer.ini needed.
-    pgbouncer:
-        image: public.ecr.aws/bitnami/pgbouncer:1.25.1-debian-12-r8
-        restart: unless-stopped
-        environment:
-            - PGBOUNCER_DATABASE=${PGBOUNCER_DB_NAME}
-            - PGBOUNCER_PORT=5432
-            - PGBOUNCER_AUTH_TYPE=scram-sha-256
-            - POSTGRESQL_HOST=db
-            - POSTGRESQL_USER=${PGBOUNCER_DB_USER}
-            - POSTGRESQL_PASSWORD=${PGBOUNCER_DB_PASSWORD}
-            - PGBOUNCER_ADMIN_USER=${PGBOUNCER_DB_USER}
-            - PGBOUNCER_ADMIN_PASSWORD=${PGBOUNCER_DB_PASSWORD}
-            - PGBOUNCER_USERLIST="${PGBOUNCER_DB_USER}" "${PGBOUNCER_DB_PASSWORD}"
-            - PGBOUNCER_MAX_CLIENT_CONN=${PGBOUNCER_MAX_CLIENT_CONN:-500}
-            - PGBOUNCER_POOL_MODE=${PGBOUNCER_POOL_MODE:-transaction}
-            - PGBOUNCER_DEFAULT_POOL_SIZE=${PGBOUNCER_DEFAULT_POOL_SIZE:-20}
-            - PGBOUNCER_RESERVE_POOL_SIZE=${PGBOUNCER_RESERVE_POOL_SIZE:-5}
-            - PGBOUNCER_RESERVE_POOL_TIMEOUT=${PGBOUNCER_RESERVE_POOL_TIMEOUT:-5}
-            - PGBOUNCER_SERVER_IDLE_TIMEOUT=${PGBOUNCER_SERVER_IDLE_TIMEOUT:-300}
-        depends_on:
-            db:
-                condition: service_healthy
-        healthcheck:
-            test: ["CMD-SHELL", "pgbouncer --version"]
-            interval: 10s
-            timeout: 5s
-            retries: 6
-            start_period: 20s
-        deploy:
-            resources:
-                limits:
-                    memory: 128m
-
-    # ── Redis (cache + Celery broker + result backend + channel layer) ─────────
-    redis:
-        image: redis:7-alpine
-        restart: unless-stopped
-        volumes:
-            - redis_data:/data
-        # No ports exposed — internal network only
-        healthcheck:
-            test: ["CMD", "redis-cli", "ping"]
-            interval: 10s
-            timeout: 5s
-            retries: 6
-        deploy:
-            resources:
-                limits:
-                    memory: 256m
 
     # ── Django ASGI web server ────────────────────────────────────────────────
     # Gunicorn manages worker lifecycle (graceful restart, SIGTERM handling).
     # UvicornWorker handles ASGI protocol — ready for Django Channels when wired.
     web:
-        build:
-            context: .
-            dockerfile: Dockerfile
-            target: prod # ← prod stage: non-root user, source baked in
+        image: ghcr.io/fardeenes7/mahajon-server:latest
         restart: unless-stopped
         ports:
             - "8001:8000" # Coolify reverse-proxy connects here
@@ -120,8 +35,13 @@ services:
             CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}
             CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
             WEB_URL: ${WEB_URL}
-            # Must be 0 with PgBouncer transaction mode
+            # Pooling requires CONN_MAX_AGE=0 — psycopg3's pool keeps the
+            # connections alive, so Django's per-request persistence is off.
             CONN_MAX_AGE: "0"
+            DB_POOL_ENABLED: "True"
+            # Gunicorn runs 4 processes, each with its own pool → 4 × 10 = 40 max.
+            DB_POOL_MIN_SIZE: ${WEB_DB_POOL_MIN_SIZE:-2}
+            DB_POOL_MAX_SIZE: ${WEB_DB_POOL_MAX_SIZE:-10}
             DATABASE_URL: ${DATABASE_URL}
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -146,11 +66,6 @@ services:
             OPENAI_API_KEY: ${OPENAI_API_KEY:-}
             GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
             GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-        depends_on:
-            pgbouncer:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
         deploy:
             resources:
                 limits:
@@ -160,16 +75,19 @@ services:
     # Handles: default, high_priority, media_processing
     # Concurrency 4 — prefork processes, safe for mixed CPU/IO tasks.
     celery_worker:
-        build:
-            context: .
-            dockerfile: Dockerfile
-            target: prod
+        image: ghcr.io/fardeenes7/mahajon-server:latest
         command: celery -A mohajon worker -l info -Q default,high_priority,media_processing,messenger --concurrency 4
         restart: unless-stopped
         environment:
             DEBUG: "False"
             SECRET_KEY: ${SECRET_KEY}
             CONN_MAX_AGE: "0"
+            DB_POOL_ENABLED: "True"
+            # Prefork: concurrency 4 = 4 single-threaded child processes, each
+            # with its own pool. One connection per child is enough; 2 gives
+            # headroom → 4 × 2 = 8 max.
+            DB_POOL_MIN_SIZE: ${WORKER_DB_POOL_MIN_SIZE:-1}
+            DB_POOL_MAX_SIZE: ${WORKER_DB_POOL_MAX_SIZE:-2}
             DATABASE_URL: ${DATABASE_URL}
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -185,11 +103,6 @@ services:
             META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN}
             SENTRY_DSN: ${SENTRY_DSN:-}
             SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
-        depends_on:
-            pgbouncer:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
         deploy:
             resources:
                 limits:
@@ -201,27 +114,25 @@ services:
     # and share the parent process memory (OpenAI client singleton, etc.).
     # Concurrency 4 is safe since GIL doesn't hurt pure-I/O workloads.
     celery_worker_ai:
-        build:
-            context: .
-            dockerfile: Dockerfile
-            target: prod
+        image: ghcr.io/fardeenes7/mahajon-server:latest
         command: celery -A mohajon worker -l info -Q ai_rag,ai_copy,ai_image --concurrency 4 --pool threads
         restart: unless-stopped
         environment:
             DEBUG: "False"
             SECRET_KEY: ${SECRET_KEY}
             CONN_MAX_AGE: "0"
+            DB_POOL_ENABLED: "True"
+            # Threads share ONE process pool (unlike prefork, where each child
+            # gets its own), so max_size must exceed concurrency — 6 for 4
+            # threads leaves headroom instead of timing out at the boundary.
+            DB_POOL_MIN_SIZE: ${AI_WORKER_DB_POOL_MIN_SIZE:-2}
+            DB_POOL_MAX_SIZE: ${AI_WORKER_DB_POOL_MAX_SIZE:-6}
             DATABASE_URL: ${DATABASE_URL}
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
             OPENAI_API_KEY: ${OPENAI_API_KEY}
             SENTRY_DSN: ${SENTRY_DSN:-}
             SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
-        depends_on:
-            pgbouncer:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
         deploy:
             resources:
                 limits:
@@ -229,31 +140,22 @@ services:
 
     # ── Celery Beat ───────────────────────────────────────────────────────────
     celery_beat:
-        build:
-            context: .
-            dockerfile: Dockerfile
-            target: prod
+        image: ghcr.io/fardeenes7/mahajon-server:latest
         command: celery -A mohajon beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
         restart: unless-stopped
         environment:
             DEBUG: "False"
             SECRET_KEY: ${SECRET_KEY}
             CONN_MAX_AGE: "0"
+            DB_POOL_ENABLED: "True"
+            DB_POOL_MIN_SIZE: ${BEAT_DB_POOL_MIN_SIZE:-1}
+            DB_POOL_MAX_SIZE: ${BEAT_DB_POOL_MAX_SIZE:-2}
             DATABASE_URL: ${DATABASE_URL}
             REDIS_URL: ${REDIS_URL}
             CELERY_BROKER_URL: ${CELERY_BROKER_URL}
             SENTRY_DSN: ${SENTRY_DSN:-}
             SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
-        depends_on:
-            pgbouncer:
-                condition: service_healthy
-            redis:
-                condition: service_healthy
         deploy:
             resources:
                 limits:
                     memory: 256m
-
-volumes:
-    postgres_data:
-    redis_data:

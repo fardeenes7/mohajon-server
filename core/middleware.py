@@ -10,7 +10,8 @@ class TenantMiddleware:
     """
     Middleware that captures the tenant context and enforces it at the database layer.
     Extracts the tenant dynamically via 'X-Tenant-ID' request header.
-    To support PgBouncer, the SET LOCAL command only lasts for the current transaction block.
+    SET LOCAL scopes the tenant to the current transaction block, so a connection
+    handed back to the pool never leaks tenant context into the next request.
     If ATOMIC gets committed, we need a signal implementation, but here we inject it 
     as part of standard workflow queries.
     """

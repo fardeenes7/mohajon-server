@@ -22,7 +22,7 @@ cp .env.dev.example .env
 ### 3. Start the stack
 
 ```bash
-docker compose -f docker-compose.dev.yml up --build
+docker compose -f docker-compose.yml up --build
 ```
 
 Services started: `db` (Postgres 16 + pgvector), `redis`, `web` (Django runserver), `celery_worker`, `celery_worker_ai`, `celery_beat`.
@@ -33,16 +33,16 @@ Postgres is exposed at `localhost:5432`, Redis at `localhost:6379` for local too
 
 ```bash
 # Run migrations
-docker compose -f docker-compose.dev.yml exec web python manage.py migrate
+docker compose -f docker-compose.yml exec web python manage.py migrate
 
 # Open Django shell
-docker compose -f docker-compose.dev.yml exec web python manage.py shell
+docker compose -f docker-compose.yml exec web python manage.py shell
 
 # Create superuser
-docker compose -f docker-compose.dev.yml exec web python manage.py createsuperuser
+docker compose -f docker-compose.yml exec web python manage.py createsuperuser
 
 # Run tests
-docker compose -f docker-compose.dev.yml exec web pytest
+docker compose -f docker-compose.yml exec web pytest
 ```
 
 ---
@@ -60,11 +60,19 @@ Set all variables from `.env.example` in Coolify's Environment Variables panel. 
 
 ### 3. Deploy
 
+Images are built and pushed to GHCR by `.github/workflows/build-backend-image.yml`
+on every push to `main` (`:latest`) and `dev` (`:dev`). Production pulls the
+pre-built image — there is no build step on the server.
+
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-Services started: `db`, `pgbouncer`, `redis`, `web` (Gunicorn + UvicornWorker ASGI), `celery_worker`, `celery_worker_ai`, `celery_beat`.
+Services started: `web` (Gunicorn + UvicornWorker ASGI), `celery_worker`, `celery_worker_ai`, `celery_beat`.
+
+Postgres and Redis are provisioned as Coolify-managed services and reached via
+`DATABASE_URL` / `REDIS_URL` — they are not part of this compose file.
 
 ### 4. Post-deployment
 
@@ -80,8 +88,8 @@ docker compose -f docker-compose.prod.yml exec web python manage.py migrate --no
 
 | Layer | Service | Notes |
 |---|---|---|
-| Database | `pgvector/pgvector:pg16-alpine` | pgvector + pg_trgm extensions enabled at init |
-| Connection pool | PgBouncer (Bitnami) | **Prod only.** Transaction mode. `CONN_MAX_AGE=0` required. |
+| Database | `pgvector/pgvector:pg16` | `vector` extension enabled at init |
+| Connection pool | psycopg3 built-in pool | **Prod only** (`DB_POOL_ENABLED=True`). In-process. Requires `CONN_MAX_AGE=0`. |
 | Cache / Broker | `redis:7-alpine` | Shared by Celery (db 1) and Django cache (db 0) |
 | Web server | Gunicorn + UvicornWorker | ASGI, 4 workers. Django Channels ready. |
 | Workers | Celery (2 containers) | General queues + AI queues (thread pool) |
@@ -91,10 +99,13 @@ docker compose -f docker-compose.prod.yml exec web python manage.py migrate --no
 
 ## Troubleshooting
 
+These use the dev `db` service. In prod, Postgres is Coolify-managed — connect
+through Coolify's own database terminal instead.
+
 ### Database collation version mismatch
 
 ```bash
-docker compose -f docker-compose.prod.yml exec db \
+docker compose exec db \
   psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} \
   -c "ALTER DATABASE ${POSTGRES_DB} REFRESH COLLATION VERSION;"
 ```
@@ -104,20 +115,21 @@ docker compose -f docker-compose.prod.yml exec db \
 The `docker/postgres/init/01-create-accounts.sh` init script runs `CREATE EXTENSION IF NOT EXISTS vector;` on first DB creation. If the volume was created before the script existed:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec db \
+docker compose exec db \
   psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} \
   -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-### PgBouncer SASL authentication failed (prod)
+### Connection pooling errors (prod)
 
-Ensure `PGBOUNCER_DB_USER` and `PGBOUNCER_DB_PASSWORD` in Coolify match the values used when the Postgres role was created by the init script. The Bitnami PgBouncer image constructs its userlist from these env vars automatically.
+See [`PRODUCTION_DB_POOLING.md`](PRODUCTION_DB_POOLING.md) for `ImproperlyConfigured`
+(pooling vs. `CONN_MAX_AGE`), `PoolTimeout`, and how to roll pooling back.
 
 ### View logs
 
 ```bash
 # Dev
-docker compose -f docker-compose.dev.yml logs -f
+docker compose -f docker-compose.yml logs -f
 
 # Prod
 docker compose -f docker-compose.prod.yml logs -f

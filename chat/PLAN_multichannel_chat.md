@@ -9,7 +9,7 @@ Both channels fully send+receive; one channel-generic agent inbox; real unread s
 
 ## Section 1 — Bug fixes (do first; smallest blast radius)
 
-1.1 **`messenger` queue is never consumed** → inbound chat is dead. Add `,messenger` to the general worker `-Q` list in `docker-compose.prod.yml` (~L167) and `docker-compose.dev.yml`. Queue already declared in `mohajon/celery.py`; no code change.
+1.1 **`messenger` queue is never consumed** → inbound chat is dead. Add `,messenger` to the general worker `-Q` list in `docker-compose.prod.yml` (~L167) and `docker-compose.yml`. Queue already declared in `mohajon/celery.py`; no code change.
 
 1.2 **WhatsApp outbound misrouted** — `chat/tasks/__init__.py` always sends via the Facebook Send API. Replace `send_api.send_text(...)` calls (greeting reply, AI reply TODO ~L135, and each branch of `_handle_postback`) with `get_adapter(channel).send_text(shop_id=, channel_identity=psid, text=, page_id=page_id)`. Thread `channel` into `_handle_postback`. Adapters resolve their own credentials.
 

@@ -115,6 +115,6 @@ class Command(BaseCommand):
                 self.style.SUCCESS(
                     f"\nEnqueued {prod_count} product(s) and {faq_count} FAQ entry(ies) "
                     f"for embedding. Watch progress:\n"
-                    f"  docker compose -f docker-compose.dev.yml logs -f celery_worker_ai"
+                    f"  docker compose -f docker-compose.yml logs -f celery_worker_ai"
                 )
             )

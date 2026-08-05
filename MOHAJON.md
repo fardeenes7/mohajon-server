@@ -23,8 +23,9 @@ Internal reference for infra/stack decisions on this project. Keep this updated 
   - Chosen over bare Daphne: Uvicorn is more actively maintained and has better performance; Gunicorn adds graceful restart and worker lifecycle management
   - No changes needed when Django Channels is wired up — UvicornWorker already speaks ASGI natively
 - **Deployment:** Docker Compose, deployed via Coolify, single VPS. Budget target: ~$20-25/month total infra until 10 paying customers.
-- **Connection pooling:** PgBouncer (Bitnami image) in **prod only** — transaction mode. Not used in dev (direct Postgres connection).
-  - `CONN_MAX_AGE` **must be `0`** in all prod Django/Celery services when going through PgBouncer transaction mode. Persistent connections exhaust the pool and cause `FATAL: connection` errors.
+- **Connection pooling:** psycopg3's built-in pool (Django 5.0+) in **prod only**, enabled via `DB_POOL_ENABLED=True`. Not used in dev (direct Postgres connection). Replaced the PgBouncer sidecar — the pool is in-process, so no extra hop and no transaction-mode caveats.
+  - `CONN_MAX_AGE` **must be `0`** in all prod Django/Celery services. Django refuses to start otherwise: `ImproperlyConfigured("Pooling doesn't support persistent connections.")`.
+  - Sizing is per-process: total connections ≈ processes × `DB_POOL_MAX_SIZE`. See PRODUCTION_DB_POOLING.md.
 
 ---
 
@@ -36,7 +37,9 @@ Single developer, pre-revenue, budget-constrained. Optimized for minimum number 
 
 **Current service count:**
 - Dev: 6 services (db, redis, web, celery_worker, celery_worker_ai, celery_beat)
-- Prod: 7 services (+ pgbouncer)
+- Prod: 4 services (web, celery_worker, celery_worker_ai, celery_beat) — Postgres
+  and Redis are Coolify-managed, and PgBouncer was replaced by psycopg3's
+  in-process connection pool (see PRODUCTION_DB_POOLING.md).
 
 ---
 
@@ -73,14 +76,14 @@ The platform architecture splits AI generation and Chat mechanics into two disti
 ## Working Agreement for AI Agents / Contributors
 
 - **Always use `docker compose exec` for running Python/Django management commands.** Do not run `python manage.py ...`, `pip install ...`, `celery ...` etc. directly on the host. Always go through the running container, e.g.:
-  - `docker compose -f docker-compose.dev.yml exec web python manage.py migrate`
-  - `docker compose -f docker-compose.dev.yml exec web python manage.py shell`
-  - `docker compose -f docker-compose.dev.yml exec web python manage.py createsuperuser`
-  - `docker compose -f docker-compose.dev.yml exec web pytest`
+  - `docker compose -f docker-compose.yml exec web python manage.py migrate`
+  - `docker compose -f docker-compose.yml exec web python manage.py shell`
+  - `docker compose -f docker-compose.yml exec web python manage.py createsuperuser`
+  - `docker compose -f docker-compose.yml exec web pytest`
 - Never assume a local virtualenv is the source of truth — the containers are.
-- When adding a new dependency, add it to `pyproject.toml` and rebuild the image (`docker compose -f docker-compose.dev.yml build`), don't `pip install` inside a running container as a permanent fix.
+- When adding a new dependency, add it to `pyproject.toml` and rebuild the image (`docker compose -f docker-compose.yml build`), don't `pip install` inside a running container as a permanent fix.
 - Dev and prod compose files are separate on purpose — do not merge them or rely on `docker-compose.override.yml` magic without discussing it here first.
-- `CONN_MAX_AGE` must remain `"0"` in all prod service definitions. Never increase this value while PgBouncer is in transaction mode.
+- `CONN_MAX_AGE` must remain `"0"` in all prod service definitions. Never raise it while `DB_POOL_ENABLED=True` — Django will refuse to start.
 - CI (`build-backend-image.yml`) builds the `prod` target of the multi-stage `Dockerfile`. The `dev` target is never pushed to the registry.
 \n### Technical Debt (AI/Chat Refactor - July 2026)
 - **Greeting keyword pre-filter logic (`chat.services.greeting.py`)**: Untested. (Lost during messenger->chat app split).
